@@ -1,6 +1,18 @@
 # CAM-JetCutting
 
-FreeCAD addon that adds two tools to the CAM Workbench toolbar for jet cutting workflow automation.
+![jetcutter_tools.svg](Resources/Icons/jetcutter_tools.svg)
+
+FreeCAD addon that adds two tools to the CAM Workbench toolbar for jet cutting workflow assistance.
+
+![CAMToolBar.png](Resources/ScreenShots/CAMToolBar.png)
+
+In many cases on a Jet CNC tool like Plasma, Laser or Waterjet the user will have a large sheet of parts to be cut. These will include a significant number of internal and externl profiles.
+
+There are two distinct use cases that these tools help with:
+
+[1] **Lots of regular shaped cutouts** where the start position of the cut on the profile is not material.In which case mass selecting all the edges of the same size (e.g. round holes, slots) and including them in a single Profile Operation will be effective.  "Same Edges as Highlighted" will help you in this scenario. 
+
+[2] **Lots of irregular and/or narrow cutouts** where the start position can matter. Due to many narrow and/or irregular holes (e.g. artisitc panels and screens) each "hole" in the sheet needs its own operation so that start positions for that cut can be defined. "Find Profiles" will help you in this use case.
 
 ## Installation
 
@@ -17,6 +29,8 @@ The addon adds a "JetCutter Tools" toolbar to the CAM Workbench with two command
 
 ### Same Edges As Highlighted
 
+![same-edges-as-highlighted.svg](Resources/Icons/same-edges-as-highlighted.svg)
+
 Finds and selects all edges in the active document that match a template profile defined by highlighted edges. Matching is based on edge length and global Z-level.
 
 **How it works:**
@@ -31,6 +45,8 @@ Finds and selects all edges in the active document that match a template profile
 **Use case:** Quickly select matching edges across multiple parts for simultaneous operations, such as finding all edges at the same Z-level for profiling or cutting.
 
 ### Find Profiles
+
+![FindProfiles.svg](Resources/Icons/FindProfiles.svg)
 
 Creates CAM Profile operations for internal edges (holes and cutouts) on the top faces of a selected CAM Job. Optionally detects and creates operations for concave indentations in the outer wire.
 
@@ -55,6 +71,7 @@ Creates CAM Profile operations for internal edges (holes and cutouts) on the top
 ## Development
 
 This addon uses the FreeCAD Workbench Manipulator pattern to contribute commands to the existing CAM Workbench toolbar. See the Addon Academy documentation for details:
+
 - https://freecad.github.io/Addon-Academy/Guides/Code/Manipulators/
 
 ## License
