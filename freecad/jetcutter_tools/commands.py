@@ -461,7 +461,7 @@ def add_leadinout_dressup(profile_op, leadIn=True, leadOut=False, styleIn="Perpe
                 )
             )
         return dressup
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         App.Console.PrintError("  [DRESSUP] ERROR: {}\n".format(e))
         import traceback
         App.Console.PrintError(traceback.format_exc())
@@ -488,7 +488,11 @@ def is_concave_indentation(edge, bb_min_x, bb_max_x, bb_min_y, bb_max_y, depth_t
                 break
 
         return any_deep
-    except Exception:
+    except (AttributeError, IndexError) as e:
+        if DEBUG:
+            App.Console.PrintMessage(
+                "  [CONCAVE] Edge vertex access error: {}\n".format(e)
+            )
         return False
 
 
@@ -580,7 +584,7 @@ def find_concave_chains(wire, face_normal, concave_depth_tol=5.0):
                 "  [CONCAVE_CHAINS] Returning {} valid chain(s)\n".format(len(chains))
             )
         return chains
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         App.Console.PrintError("  [CONCAVE_CHAINS] ERROR: {}\n".format(e))
         import traceback
         App.Console.PrintError(traceback.format_exc())
@@ -807,7 +811,7 @@ def create_profile_ops_for_top_loops():
                                             base_obj.Name, sub, type(elem).__name__
                                         )
                                     )
-                            except Exception as e:
+                            except Exception as e:  # noqa: BLE001
                                 App.Console.PrintError(
                                     "    INVALID: {} -> {} ERROR: {}\n".format(
                                         base_obj.Name, sub, e
@@ -913,7 +917,7 @@ def create_profile_ops_for_top_loops():
                                             "(will be mishandled as open profile)\n"
                                         )
                                     continue
-                        except Exception as e:
+                        except Exception as e:  # noqa: BLE001
                             if DEBUG:
                                 App.Console.PrintMessage(
                                     "  [CONCAVE] Wire validation failed: {}. Skipping chain.\n".format(e)
@@ -996,7 +1000,7 @@ def create_profile_ops_for_top_loops():
                                                     base_obj.Name, sub, type(elem).__name__
                                                 )
                                             )
-                                    except Exception as e:
+                                    except Exception as e:  # noqa: BLE001
                                         App.Console.PrintError(
                                             "    INVALID: {} -> {} ERROR: {}\n".format(
                                                 base_obj.Name, sub, e
@@ -1049,7 +1053,7 @@ def create_profile_ops_for_top_loops():
                                 )
                             )
 
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001
                         App.Console.PrintError(
                             "  [CONCAVE] ERROR processing chain: {}\n".format(e)
                         )
