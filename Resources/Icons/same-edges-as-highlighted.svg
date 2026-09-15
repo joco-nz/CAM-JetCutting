@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48px" height="48px">
+  <g id="FreeCADSameZPlaneEdges" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    
+    <!-- 1. Z-PLANE SLICE FIELD BACKDROP (Sky Blue 1 / Sky Blue 3 Border) -->
+    <!-- Rendered first as a structural backdrop plate -->
+    <path d="M 4 28 L 20 20 L 44 28 L 28 36 Z" fill="#729FCF" stroke="#204A87" stroke-width="2" />
+
+    <!-- 2. BASE STEPPED CAD PART MODEL (Aluminium 2 Base / Aluminium 5 Edges) -->
+    <!-- Lower Step Geometry Block -->
+    <path d="M 8 36 L 24 44 L 40 36 L 40 28 L 24 36 L 8 28 Z" fill="#D3D7CF" stroke="#555753" stroke-width="2" />
+    <path d="M 8 36 L 8 40 L 24 48 L 40 40 L 40 36" stroke="#555753" stroke-width="2" />
+    <line x1="24" y1="44" x2="24" y2="48" stroke="#555753" stroke-width="2" />
+    
+    <!-- Upper Step Geometry Block -->
+    <path d="M 14 26 L 24 31 L 34 26 L 34 16 L 24 11 L 14 16 Z" fill="#EEEEEC" stroke="#555753" stroke-width="2" />
+    <line x1="24" y1="31" x2="24" y2="11" stroke="#555753" stroke-width="2" />
+
+    <!-- 3. DETECTED EDGES ON THE SAME Z-HEIGHT (Scarlet Red 1 / Scarlet Red 3 Base) -->
+    <!-- Thick background stroke for structural contrast -->
+    <path d="M 14 26 L 24 31" stroke="#A40000" stroke-width="4" />
+    <path d="M 24 31 L 34 26" stroke="#A40000" stroke-width="4" />
+    <path d="M 8 28 L 24 36" stroke="#A40000" stroke-width="4" />
+    <path d="M 24 36 L 40 28" stroke="#A40000" stroke-width="4" />
+
+    <!-- Primary Foreground selection strokes (True FreeCAD selection highlight) -->
+    <path d="M 14 26 L 24 31" stroke="#EF2929" stroke-width="2" />
+    <path d="M 24 31 L 34 26" stroke="#EF2929" stroke-width="2" />
+    <path d="M 8 28 L 24 36" stroke="#EF2929" stroke-width="2" />
+    <path d="M 24 36 L 40 28" stroke="#EF2929" stroke-width="2" />
+
+    <!-- 4. HEIGHT VECTOR TRACKING AXIS (Orange 2 / Butter 1) -->
+    <path d="M 44 14 L 44 24" stroke="#CE5C00" stroke-width="2" />
+    <path d="M 42 17 L 44 14 L 46 17" stroke="#CE5C00" stroke-width="2" />
+    <path d="M 42 21 L 44 24 L 46 21" stroke="#CE5C00" stroke-width="2" />
+    
+    <!-- Clear "Z" Coordinate Label Indicator -->
+    <path d="M 42 10 L 46 10 L 42 14 L 46 14" stroke="#F57900" stroke-width="2" />
+
+    <!-- Reference tracking markers matching working file parameters -->
+    <circle cx="24" cy="8" r="1" fill="#555753" stroke="none" />
+    <circle cx="24" cy="4" r="1" fill="#555753" stroke="none" />
+
+  </g>
+</svg>

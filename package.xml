@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- SPDX-License-Identifier: LGPL-2.1-or-later -->
+<package format="1" xmlns="https://wiki.freecad.org/Package_Metadata">
+
+    <!--[ Info ]-->
+
+    <name>CAM-JetCutting</name>
+    <description>CAM workflow utilities for profile selection and profile operation generation.</description>
+    <version>1.0.0</version>
+    <date>2026-09-16</date>
+
+    <!--[ Ecosystem Requirements ]-->
+
+    <freecadmin>1.1.0</freecadmin>
+    <pythonmin>3.11</pythonmin>
+
+    <!--[ Dependencies ]-->
+
+    <depend type="internal">cam</depend>
+
+    <!--[ Tags ]-->
+
+    <tag>CAM</tag>
+    <tag>Path</tag>
+    <tag>Profile</tag>
+    <tag>Utilities</tag>
+
+    <!--[ Maintainers ]-->
+
+    <maintainer email="james@jameswalker.dev">James Walker</maintainer>
+
+    <!--[ Authors ]-->
+
+    <author>James Walker</author>
+
+    <!--[ Licenses ]-->
+
+    <license file="LICENSE-Code">LGPL-2.1-or-later</license>
+    <license file="LICENSE-Assets">LGPL-2.1-or-later</license>
+
+    <!--[ Icon ]-->
+
+    <icon>Resources/Icons/jetcutter_tools.svg</icon>
+
+    <!--[ Urls ]-->
+
+    <url branch="main" type="repository">https://github.com/joco-nz/CAM-JetCutting</url>
+    <url type="bugtracker">https://github.com/joco-nz/CAM-JetCutting/issues</url>
+    <url type="readme">https://raw.githubusercontent.com/joco-nz/CAM-JetCutting/refs/heads/main/README.md</url>
+
+    <!--[ Content ]-->
+
+    <content>
+        <other/>
+    </content>
+
+</package>

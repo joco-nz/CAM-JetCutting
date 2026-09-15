@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <g id="JetCuttingTorch" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    
+    <!-- === BACKGROUND WORKPIECE === -->
+    <!-- Metal Sheet Plate (Aluminium 3 Base) with Jet-Cut Hole -->
+    <path d="M 6 54 L 58 54" stroke="#0b1521" stroke-width="6" />
+    <path d="M 6 54 L 24 54" stroke="#babdb6" stroke-width="2" />
+    <path d="M 40 54 L 58 54" stroke="#babdb6" stroke-width="2" />
+    
+    <!-- === TORCH HEAD BODY === -->
+    <!-- Sky Blue 4 (Dark Outline Framework) -->
+    <path d="M 18 10 L 46 10 L 42 22 L 22 22 Z" fill="#0b1521" stroke="#0b1521" stroke-width="4" />
+    <!-- Sky Blue 2 (Main Tool Modification Base Color) -->
+    <path d="M 18 10 L 46 10 L 42 22 L 22 22 Z" fill="#3465a4" stroke="#729fcf" stroke-width="2" />
+    
+    <!-- === MIDDLE TRANSITION SLEEVE === -->
+    <!-- Aluminium 6 Outline -->
+    <path d="M 24 22 L 40 22 L 38 32 L 26 32 Z" fill="#2e3436" stroke="#2e3436" stroke-width="4" />
+    <!-- Aluminium 1 (Sleeve Body & Highlight) -->
+    <path d="M 24 22 L 40 22 L 38 32 L 26 32 Z" fill="#eeeeec" stroke="#ffffff" stroke-width="2" />
+    
+    <!-- === NOZZLE TIP === -->
+    <!-- Scarlet Red 4 Outline -->
+    <path d="M 28 32 L 36 32 L 34 40 L 30 40 Z" fill="#280000" stroke="#280000" stroke-width="4" />
+    <!-- Scarlet Red 2 (High Heat Base Color) -->
+    <path d="M 28 32 L 36 32 L 34 40 L 30 40 Z" fill="#cc0000" stroke="#ef2929" stroke-width="2" />
+    
+    <!-- === INTENSE PLASMA / LASER JET BEAM === -->
+    <!-- Scarlet Red 4 Outline -->
+    <path d="M 31 40 L 33 40 L 35 54 L 29 54 Z" fill="#280000" stroke="#280000" stroke-width="4" />
+    <!-- Scarlet Red 1 (High Energy Active Ray) -->
+    <path d="M 31 40 L 33 40 L 35 54 L 29 54 Z" fill="#ef2929" stroke="#ffffff" stroke-width="2" />
+    
+    <!-- === SPLASH SPARKS / MATERIAL PIERCING EFFECT === -->
+    <!-- Spark 1 Left (Scarlet Red 1) -->
+    <circle cx="21" cy="46" r="2" fill="#ef2929" stroke="#280000" stroke-width="2" />
+    <!-- Spark 2 Right (Orange 1) -->
+    <circle cx="43" cy="48" r="2" fill="#fcaf3e" stroke="#321900" stroke-width="2" />
+    <!-- Spark 3 Inner (Butter 1) -->
+    <circle cx="26" cy="42" r="1" fill="#fce94f" stroke="#302b00" stroke-width="2" />
+    <!-- Spark 4 Inner Right (Orange 2) -->
+    <circle cx="38" cy="43" r="1" fill="#f57900" stroke="#321900" stroke-width="2" />
+    
+  </g>
+</svg>

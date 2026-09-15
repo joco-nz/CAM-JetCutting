@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" version="1.1">
+  <g id="FreeCADJetCuttingIcon" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    
+    <!-- 1. ICON BASE OUTER CONTAINER (Aluminium 1 Base / Aluminium 6 Outline) -->
+    <rect x="3" y="3" width="58" height="58" rx="6" ry="6" fill="#eeeeec" stroke="#2e3436" stroke-width="2" />
+    
+    <!-- SALCHO Internal Highlight Ring (Snowy White) -->
+    <rect x="5" y="5" width="54" height="54" fill="none" stroke="#ffffff" stroke-width="2" />
+
+    <!-- 2. OUTER STOCK BOUNDARY (Orange 2 Dashed Path) -->
+    <rect x="12" y="12" width="40" height="40" rx="2" ry="2" fill="none" stroke="#f57900" stroke-width="2" stroke-dasharray="4 4" />
+
+    <!-- 3. MAIN MODIFICATION TOOLPATH (Sky Blue Tones) -->
+    <!-- Official FreeCAD modification colors replace the legacy bright green profile -->
+    <rect x="20" y="20" width="24" height="24" rx="1" ry="1" fill="none" stroke="#204a87" stroke-width="6" />
+    <rect x="20" y="20" width="24" height="24" rx="1" ry="1" fill="none" stroke="#3465a4" stroke-width="4" />
+    <rect x="20" y="20" width="24" height="24" rx="1" ry="1" fill="none" stroke="#729fcf" stroke-width="2" />
+
+    <!-- TOOLPATH DIRECTION ARROWS (Sky Blue 4 / Dark Outline) -->
+    <path d="M 30 42 L 34 44 L 30 46" fill="none" stroke="#0b1521" stroke-width="2" />
+    <path d="M 42 34 L 44 30 L 46 34" fill="none" stroke="#0b1521" stroke-width="2" />
+
+    <!-- 4. ACTIVE JET TORCH / CUTTING NOZZLE HEAD (Top Left Corner) -->
+    <!-- Outer Plasma Rays / Splash Flares (Scarlet Red 1) -->
+    <line x1="20" y1="6" x2="20" y2="26" stroke="#ef2929" stroke-width="2" />
+    <line x1="10" y1="16" x2="30" y2="16" stroke="#ef2929" stroke-width="2" />
+    <line x1="13" y1="9" x2="27" y2="23" stroke="#ef2929" stroke-width="2" />
+    <line x1="13" y1="23" x2="27" y2="9" stroke="#ef2929" stroke-width="2" />
+
+    <!-- Inner Plasma Rays (Butter 1) -->
+    <line x1="20" y1="9" x2="20" y2="23" stroke="#fce94f" stroke-width="2" />
+    <line x1="13" y1="16" x2="27" y2="16" stroke="#fce94f" stroke-width="2" />
+
+    <!-- Torch Body Ring (Aluminium 6 / Jet Black Core) -->
+    <circle cx="20" cy="16" r="7" fill="#2e3436" stroke="#0b1521" stroke-width="2" />
+    <circle cx="20" cy="16" r="5" fill="none" stroke="#888a85" stroke-width="1" />
+    
+    <!-- Intense High-Heat Cutting Center Focal Point (Butter 1 / Core Explosion) -->
+    <circle cx="20" cy="16" r="3" fill="#fce94f" stroke="#ce5c00" stroke-width="2" />
+
+  </g>
+</svg>

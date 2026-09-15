@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# SPDX-FileNotice: Part of CAM-JetCutting
+
+[project]
+version = "1.0.0"
+name = "CAM-JetCutting"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "freecad-stubs>=1.0.21",
+    "pyside6>=6.11.0",
+]
