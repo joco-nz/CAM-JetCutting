@@ -314,26 +314,36 @@ if concave_indices[0] == len(edges) - 1 and concave_indices[1] == 0:
 
 #### Visual representation
 
-```
-Bounding box: ┌─────────────────────────┐
-              │                         │
-              │    ┌───┐               │
-              │    │   │               │
-              │    └───┘               │
-              │                         │
-              └─────────────────────────┘
+**Regular indentation** — a notch on the right edge:
 
-Concave edges (●) inside bbox:
-  ┌─────────────────────────┐
-  │                         │
-  │  ┌───●●●●●●───┐         │
-  │  │           │         │
-  │  └───────────┘         │
-  │                         │
-  └─────────────────────────┘
-
-Chain: ●●●●● → 1 concave indentation
 ```
+   +--------+
+   |        |
+   |        |
+   |     +--+
+   |     |
+   |     |
+   |     +--+
+   |        |
+   |        |
+   +--------+
+```
+
+The notch creates concave edges 3, 4, 5 whose vertices extend inward past the depth tolerance. These form chain `[3, 4, 5]`.
+
+**Wrap-around indentation** — a notch at the corner, spanning from the last edge to the first edge of the wire:
+
+```
+   +-----+
+   |     |
+   |     |
+   |     +--+
+   |        |
+   |        |
+   +--------+
+```
+
+The notch creates concave edges 8, 0, 1. Since `concave_indices[0] == len(edges) - 1` (8 == 8) and `concave_indices[1] == 0`, the chain wraps around the wire boundary and is merged into a single chain `[8, 0, 1]`.
 
 #### Mermaid diagram — concave detection flow
 
