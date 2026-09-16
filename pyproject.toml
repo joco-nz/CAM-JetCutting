@@ -12,3 +12,57 @@ dev = [
     "freecad-stubs>=1.0.21",
     "pyside6>=6.11.0",
 ]
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["F", "E", "W", "I", "BLE", "B", "SIM", "UP", "RUF", "RET", "D", "ARG", "PTH", "PERF", "C90", "PLR"]
+ignore = [
+    # Line too long — DEBUG log messages that would lose readability if split
+    "E501",
+    # FreeCAD types have no stubs — annotations would be guesswork
+    "ANN001",
+    "ANN002",
+    "ANN003",
+    "ANN201",
+    "ANN202",
+    "ANN204",
+    "ANN205",
+    "ANN401",
+    # Lazy imports to avoid circular deps with FreeCAD modules
+    "PLC0415",
+    # camelCase names from FreeCAD API or original function params
+    "N802",
+    "N803",
+    "N806",
+    # Domain constants, not arbitrary magic numbers
+    "PLR2004",
+    # Complexity on the 1092-line monolith — refactoring would break FreeCAD integration
+    "PLR0912",
+    "PLR0913",
+    "PLR0915",
+    "C901",
+    # Style preference — return before except is fine here
+    "TRY300",
+    # os.path is fine for FreeCAD compatibility; pathlib can break in some builds
+    "PTH100",
+    "PTH118",
+    "PTH120",
+    # Docstring nitpicks on internal functions
+    "D100",
+    "D101",
+    "D102",
+    "D103",
+    "D203",
+    "D212",
+    "D213",
+    # Cosmetic — list comprehension vs for loop
+    "PERF401",
+    # Deliberate — FreeCAD stub method signature
+    "ARG002",
+    # FreeCAD icon name — can't change
+    "RUF001",
+    # Boolean defaults required by FreeCAD API
+    "FBT002",
+]

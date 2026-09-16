@@ -20,8 +20,7 @@ class SameEdgesAsHighlighted:
         first_sel = selection[0]
         if not first_sel.SubElementNames:
             return False
-        has_edge = any(sub.startswith("Edge") for sub in first_sel.SubElementNames)
-        return has_edge
+        return any(sub.startswith("Edge") for sub in first_sel.SubElementNames)
 
     def Activated(self):
         TOLERANCE = 1e-3
@@ -570,7 +569,7 @@ def find_concave_chains(wire, face_normal, concave_depth_tol=5.0):
 
 
 def create_profile_ops_for_top_loops():
-    """Main entry point for FindProfiles command."""
+    """Create Profile operations for CAM Job top faces."""
     if DEBUG:
         App.Console.PrintMessage("=== MACRO START ===\n")
 
