@@ -49,7 +49,7 @@ class SameEdgesAsHighlighted:
             edge = source_obj.Shape.Edges[edge_index]
 
             target_edges_data.append({
-                'length': edge.Length,
+                "length": edge.Length,
             })
             target_z_positions.append(edge.CenterOfMass.z)
 
@@ -60,7 +60,7 @@ class SameEdgesAsHighlighted:
         avg_target_z = sum(target_z_positions) / len(target_z_positions)
         if DEBUG:
             App.Console.PrintMessage(
-                f"Template profile: {len(target_edges_data)} edges at Global Z-level: {avg_target_z:.4f} mm\n"
+                f"Template profile: {len(target_edges_data)} edges at Global Z-level: {avg_target_z:.4f} mm\n",
             )
 
         Gui.Selection.clearSelection()
@@ -92,7 +92,7 @@ class SameEdgesAsHighlighted:
                 if abs(edge_z - avg_target_z) <= TOLERANCE:
                     is_match = False
                     for target in target_edges_data:
-                        if abs(edge.Length - target['length']) <= TOLERANCE:
+                        if abs(edge.Length - target["length"]) <= TOLERANCE:
                             is_match = True
                             break
 
@@ -105,19 +105,19 @@ class SameEdgesAsHighlighted:
                 Gui.Selection.addSelection(obj, tuple(matched_edge_names))
                 if DEBUG:
                     App.Console.PrintMessage(
-                        f"Found {matched_on_this_obj} matching edges in visible object: '{obj.Label}'\n"
+                        f"Found {matched_on_this_obj} matching edges in visible object: '{obj.Label}'\n",
                     )
 
         if DEBUG:
             App.Console.PrintMessage(
-                f"Done! Successfully selected {total_matched_count} matching edges across visible solids.\n"
+                f"Done! Successfully selected {total_matched_count} matching edges across visible solids.\n",
             )
 
     def GetResources(self):
         return {
-            'Pixmap': 'same-edges-as-highlighted',
-            'MenuText': 'Same Edges As Highlighted',
-            'ToolTip': 'Select all edges matching the length and Z-level of highlighted edges',
+            "Pixmap": "same-edges-as-highlighted",
+            "MenuText": "Same Edges As Highlighted",
+            "ToolTip": "Select all edges matching the length and Z-level of highlighted edges",
         }
 
 
@@ -165,9 +165,9 @@ class FindProfiles:
 
     def GetResources(self):
         return {
-            'Pixmap': 'FindProfiles',
-            'MenuText': 'Find Profiles',
-            'ToolTip': 'Create Profile operations for internal edges on CAM Job top faces',
+            "Pixmap": "FindProfiles",
+            "MenuText": "Find Profiles",
+            "ToolTip": "Create Profile operations for internal edges on CAM Job top faces",
         }
 
 
@@ -178,9 +178,9 @@ class FindProfiles:
 def show_profile_settings_dialog(job):
     """Show a dialog to select Tool, Offset Side, Cut Direction, and LeadInOut settings."""
     try:
-        from PySide import QtGui, QtCore
+        from PySide import QtCore, QtGui
     except ImportError:
-        from PySide6 import QtGui, QtCore
+        from PySide6 import QtCore, QtGui
 
     tools_folder = None
     for obj in job.OutList:
@@ -389,8 +389,8 @@ def show_profile_settings_dialog(job):
                     selected["styleOut"],
                     selected["lengthMultiplier"],
                     selected["concaveDetection"],
-                    selected["concaveDepthTol"]
-                )
+                    selected["concaveDepthTol"],
+                ),
             )
         return selected
 
@@ -405,10 +405,8 @@ def add_leadinout_dressup(profile_op, leadIn=True, leadOut=False, styleIn="Perpe
     try:
         if DEBUG:
             App.Console.PrintMessage(
-                "  [DRESSUP] Creating dressup for op='{}', leadIn={}, leadOut={}, "
-                "styleIn={}, styleOut={}, lengthMult={}\n".format(
-                    profile_op.Name, leadIn, leadOut, styleIn, styleOut, lengthMultiplier
-                )
+                f"  [DRESSUP] Creating dressup for op='{profile_op.Name}', leadIn={leadIn}, leadOut={leadOut}, "
+                f"styleIn={styleIn}, styleOut={styleOut}, lengthMult={lengthMultiplier}\n",
             )
         import Path.Dressup.Gui.LeadInOut as LeadInOutDressup
         dressup = LeadInOutDressup.Create(profile_op, mode=2)
@@ -417,7 +415,7 @@ def add_leadinout_dressup(profile_op, leadIn=True, leadOut=False, styleIn="Perpe
             return None
         if DEBUG:
             App.Console.PrintMessage(
-                "  [DRESSUP] Created dressup object: {}\n".format(dressup.Name)
+                f"  [DRESSUP] Created dressup object: {dressup.Name}\n",
             )
         dressup.LeadIn = leadIn
         dressup.LeadOut = leadOut
@@ -425,44 +423,35 @@ def add_leadinout_dressup(profile_op, leadIn=True, leadOut=False, styleIn="Perpe
         dressup.StyleOut = styleOut
         if DEBUG:
             App.Console.PrintMessage(
-                "  [DRESSUP] Set LeadIn={}, LeadOut={}, StyleIn={}, StyleOut={}\n".format(
-                    dressup.LeadIn, dressup.LeadOut, dressup.StyleIn, dressup.StyleOut
-                )
+                f"  [DRESSUP] Set LeadIn={dressup.LeadIn}, LeadOut={dressup.LeadOut}, StyleIn={dressup.StyleIn}, StyleOut={dressup.StyleOut}\n",
             )
 
         import Path.Dressup as PathDressup
         baseOp = PathDressup.baseOp(dressup.Base)
         if baseOp and getattr(baseOp, "ToolController", None):
             toolDiameter = baseOp.ToolController.Tool.Diameter.Value
-            expr = "{}.ToolController.Tool.Diameter.Value*{}".format(
-                baseOp.Name, lengthMultiplier)
+            expr = f"{baseOp.Name}.ToolController.Tool.Diameter.Value*{lengthMultiplier}"
             dressup.setExpression("RadiusIn", expr)
             dressup.setExpression("RadiusOut", expr)
             if DEBUG:
                 App.Console.PrintMessage(
-                    "  [DRESSUP] Set expressions: RadiusIn={}, RadiusOut={}\n".format(
-                        dressup.RadiusIn, dressup.RadiusOut
-                    )
+                    f"  [DRESSUP] Set expressions: RadiusIn={dressup.RadiusIn}, RadiusOut={dressup.RadiusOut}\n",
                 )
         else:
             dressup.RadiusIn = lengthMultiplier
             dressup.RadiusOut = lengthMultiplier
             if DEBUG:
                 App.Console.PrintMessage(
-                    "  [DRESSUP] No tool controller found, set RadiusIn={}, RadiusOut={} (raw)\n".format(
-                        lengthMultiplier, lengthMultiplier
-                    )
+                    f"  [DRESSUP] No tool controller found, set RadiusIn={lengthMultiplier}, RadiusOut={lengthMultiplier} (raw)\n",
                 )
 
         if DEBUG:
             App.Console.PrintMessage(
-                "  [DRESSUP] Final: RadiusIn={}, RadiusOut={}\n".format(
-                    dressup.RadiusIn, dressup.RadiusOut
-                )
+                f"  [DRESSUP] Final: RadiusIn={dressup.RadiusIn}, RadiusOut={dressup.RadiusOut}\n",
             )
         return dressup
     except Exception as e:  # noqa: BLE001
-        App.Console.PrintError("  [DRESSUP] ERROR: {}\n".format(e))
+        App.Console.PrintError(f"  [DRESSUP] ERROR: {e}\n")
         import traceback
         App.Console.PrintError(traceback.format_exc())
         return None
@@ -481,7 +470,7 @@ def is_concave_indentation(edge, bb_min_x, bb_max_x, bb_min_y, bb_max_y, depth_t
                 v.X - bb_min_x,
                 bb_max_x - v.X,
                 v.Y - bb_min_y,
-                bb_max_y - v.Y
+                bb_max_y - v.Y,
             )
             if dist > depth_tol:
                 any_deep = True
@@ -491,7 +480,7 @@ def is_concave_indentation(edge, bb_min_x, bb_max_x, bb_min_y, bb_max_y, depth_t
     except (AttributeError, IndexError) as e:
         if DEBUG:
             App.Console.PrintMessage(
-                "  [CONCAVE] Edge vertex access error: {}\n".format(e)
+                f"  [CONCAVE] Edge vertex access error: {e}\n",
             )
         return False
 
@@ -504,17 +493,15 @@ def find_concave_chains(wire, face_normal, concave_depth_tol=5.0):
         edges = wire.Edges
         if DEBUG:
             App.Console.PrintMessage(
-                "  [CONCAVE_CHAINS] Wire has {} edges, normal_z={:.6f}\n".format(
-                    len(edges), face_normal.z
-                )
+                f"  [CONCAVE_CHAINS] Wire has {len(edges)} edges, normal_z={face_normal.z:.6f}\n",
             )
         if len(edges) < 2:
             if DEBUG:
                 App.Console.PrintMessage("  [CONCAVE_CHAINS] Not enough edges (< 2), returning []\n")
             return []
 
-        bb_min_x = bb_min_y = float('inf')
-        bb_max_x = bb_max_y = float('-inf')
+        bb_min_x = bb_min_y = float("inf")
+        bb_max_x = bb_max_y = float("-inf")
         for edge in edges:
             for v in edge.Vertexes:
                 bb_min_x = min(bb_min_x, v.X)
@@ -524,9 +511,7 @@ def find_concave_chains(wire, face_normal, concave_depth_tol=5.0):
 
         if DEBUG:
             App.Console.PrintMessage(
-                "  [CONCAVE_CHAINS] Bounding box: x=[{:.2f}, {:.2f}], y=[{:.2f}, {:.2f}], concaveDepthTol={:.1f}\n".format(
-                    bb_min_x, bb_max_x, bb_min_y, bb_max_y, concave_depth_tol
-                )
+                f"  [CONCAVE_CHAINS] Bounding box: x=[{bb_min_x:.2f}, {bb_max_x:.2f}], y=[{bb_min_y:.2f}, {bb_max_y:.2f}], concaveDepthTol={concave_depth_tol:.1f}\n",
             )
 
         concave_indices = []
@@ -536,22 +521,16 @@ def find_concave_chains(wire, face_normal, concave_depth_tol=5.0):
                 concave_indices.append(i)
             if DEBUG:
                 App.Console.PrintMessage(
-                    "  [CONCAVE] Edge{}: index={}, concave={}\n".format(
-                        i + 1, i, is_concave
-                    )
+                    f"  [CONCAVE] Edge{i + 1}: index={i}, concave={is_concave}\n",
                 )
 
         if DEBUG:
             App.Console.PrintMessage(
-                "  [CONCAVE_CHAINS] Found {} concave edge(s) at indices: {}\n".format(
-                    len(concave_indices), concave_indices
-                )
+                f"  [CONCAVE_CHAINS] Found {len(concave_indices)} concave edge(s) at indices: {concave_indices}\n",
             )
         if DEBUG:
             App.Console.PrintMessage(
-                "  [CONCAVE_CHAINS] Boundary edges: {}, Concave edges: {}\n".format(
-                    len(edges) - len(concave_indices), len(concave_indices)
-                )
+                f"  [CONCAVE_CHAINS] Boundary edges: {len(edges) - len(concave_indices)}, Concave edges: {len(concave_indices)}\n",
             )
 
         if len(concave_indices) < 2:
@@ -575,17 +554,17 @@ def find_concave_chains(wire, face_normal, concave_depth_tol=5.0):
             wrap_chain = [edges[idx] for idx in concave_indices]
             if DEBUG:
                 App.Console.PrintMessage(
-                    "  [CONCAVE_CHAINS] Full-wire wrap: {} edges\n".format(len(wrap_chain))
+                    f"  [CONCAVE_CHAINS] Full-wire wrap: {len(wrap_chain)} edges\n",
                 )
             chains = [wrap_chain]
 
         if DEBUG:
             App.Console.PrintMessage(
-                "  [CONCAVE_CHAINS] Returning {} valid chain(s)\n".format(len(chains))
+                f"  [CONCAVE_CHAINS] Returning {len(chains)} valid chain(s)\n",
             )
         return chains
     except Exception as e:  # noqa: BLE001
-        App.Console.PrintError("  [CONCAVE_CHAINS] ERROR: {}\n".format(e))
+        App.Console.PrintError(f"  [CONCAVE_CHAINS] ERROR: {e}\n")
         import traceback
         App.Console.PrintError(traceback.format_exc())
         return []
@@ -603,7 +582,7 @@ def create_profile_ops_for_top_loops():
 
     job = selection_ex[0].Object
     if DEBUG:
-        App.Console.PrintMessage("  Selected job: '{}' (type: {})\n".format(job.Name, type(job).__name__))
+        App.Console.PrintMessage(f"  Selected job: '{job.Name}' (type: {type(job).__name__})\n")
 
     if not hasattr(job, "Proxy") or "Job" not in job.Proxy.__class__.__name__:
         App.Console.PrintError("Selected object is not a CAM Job.\n")
@@ -635,14 +614,10 @@ def create_profile_ops_for_top_loops():
     if DEBUG:
         App.Console.PrintMessage(
             "=== SETUP ===\n"
-            "Targeting geometry: '{}' (Source: '{}')\n"
-            "Model clone: '{}'\n"
-            "Clone has {} edges\n"
-            "Source has {} edges\n".format(
-                model_clone.Label, source_obj.Name,
-                model_clone.Name, len(master_edges),
-                len(source_obj.Shape.Edges)
-            )
+            f"Targeting geometry: '{model_clone.Label}' (Source: '{source_obj.Name}')\n"
+            f"Model clone: '{model_clone.Name}'\n"
+            f"Clone has {len(master_edges)} edges\n"
+            f"Source has {len(source_obj.Shape.Edges)} edges\n",
         )
 
     top_faces = []
@@ -655,7 +630,7 @@ def create_profile_ops_for_top_loops():
             top_faces.append((face, normal))
 
     if DEBUG:
-        App.Console.PrintMessage("Found {} top faces\n".format(len(top_faces)))
+        App.Console.PrintMessage(f"Found {len(top_faces)} top faces\n")
 
     if not top_faces:
         App.Console.PrintWarning("No top-facing flat planes found on the model.\n")
@@ -677,17 +652,14 @@ def create_profile_ops_for_top_loops():
 
     if DEBUG:
         App.Console.PrintMessage(
-            "Settings: Tool='{}', Side='{}', Direction='{}', LeadIn={}, LeadOut={}, "
-            "StyleIn={}, StyleOut={}, LengthMult={}\n".format(
-                tool_controller.Name, offset_side, cut_direction,
-                leadIn, leadOut, styleIn, styleOut, lengthMultiplier
-            )
+            f"Settings: Tool='{tool_controller.Name}', Side='{offset_side}', Direction='{cut_direction}', LeadIn={leadIn}, LeadOut={leadOut}, "
+            f"StyleIn={styleIn}, StyleOut={styleOut}, LengthMult={lengthMultiplier}\n",
         )
 
     import Path.Op.Gui.Profile as PathProfileGui
     res = PathProfileGui.Command.res
 
-    import PathScripts.PathUtils as PathUtils
+    from PathScripts import PathUtils
     op_count = 0
     closed_loop_count = 0
     concave_total = 0
@@ -709,7 +681,7 @@ def create_profile_ops_for_top_loops():
         for face, normal in top_faces:
             if DEBUG:
                 App.Console.PrintMessage(
-                    "  Processing face with normal_z={:.6f}\n".format(normal.z)
+                    f"  Processing face with normal_z={normal.z:.6f}\n",
                 )
             outer_hash = face.OuterWire.hashCode()
             for wire in face.Wires:
@@ -722,14 +694,12 @@ def create_profile_ops_for_top_loops():
                 for edge in wire.Edges:
                     for idx, master_edge in enumerate(master_edges):
                         if master_edge.isEqual(edge):
-                            edge_names.append("Edge{}".format(idx + 1))
+                            edge_names.append(f"Edge{idx + 1}")
                             break
 
                 if DEBUG:
                     App.Console.PrintMessage(
-                        "  Wire: {} edges, matched: {}\n".format(
-                            len(wire.Edges), len(edge_names)
-                        )
+                        f"  Wire: {len(wire.Edges)} edges, matched: {len(edge_names)}\n",
                     )
 
                 if len(edge_names) < 2:
@@ -737,26 +707,26 @@ def create_profile_ops_for_top_loops():
 
                 op_count += 1
                 closed_loop_count += 1
-                op_name = "Profile_Loop_{}".format(op_count)
+                op_name = f"Profile_Loop_{op_count}"
 
                 if DEBUG:
                     App.Console.PrintMessage(
-                        "=== CREATING {} ===\n".format(op_name)
+                        f"=== CREATING {op_name} ===\n",
                     )
 
                 import Path.Op.Profile as PathProfileOp
                 profile_op = PathProfileOp.Create(op_name, parentJob=job)
                 if profile_op is None:
                     App.Console.PrintError(
-                        "  [CREATE] Profile.Create() returned None for '{}'\n".format(op_name)
+                        f"  [CREATE] Profile.Create() returned None for '{op_name}'\n",
                     )
                     continue
                 if DEBUG:
                     App.Console.PrintMessage(
                         "  [CREATE] Created op: {}, type={}, hasProxy={}\n".format(
                             profile_op.Name, type(profile_op).__name__,
-                            hasattr(profile_op, "Proxy")
-                        )
+                            hasattr(profile_op, "Proxy"),
+                        ),
                     )
 
                 if DEBUG:
@@ -766,13 +736,13 @@ def create_profile_ops_for_top_loops():
                         "    op.Proxy = {}\n"
                         "    op.Proxy.job = {}\n".format(
                             profile_op.Base, profile_op.Proxy,
-                            profile_op.Proxy.job if hasattr(profile_op.Proxy, 'job') else "N/A"
-                        )
+                            profile_op.Proxy.job if hasattr(profile_op.Proxy, "job") else "N/A",
+                        ),
                     )
 
                 profile_op.ToolController = tool_controller
                 if DEBUG:
-                    App.Console.PrintMessage("  ToolController set to {}\n".format(tool_controller.Name))
+                    App.Console.PrintMessage(f"  ToolController set to {tool_controller.Name}\n")
 
                 import Path.Op.Gui.Base as PathOpGui
                 profile_op.ViewObject.Proxy = PathOpGui.ViewProvider(profile_op.ViewObject, res)
@@ -784,20 +754,16 @@ def create_profile_ops_for_top_loops():
 
                 if DEBUG:
                     App.Console.PrintMessage(
-                        "  Setting Base = {}\n".format(base_list)
+                        f"  Setting Base = {base_list}\n",
                     )
                 profile_op.Base = base_list
 
                 if DEBUG:
                     App.Console.PrintMessage(
                         "  After assignment:\n"
-                        "    profile_op.Base = {}\n"
-                        "    type(profile_op.Base) = {}\n"
-                        "    len(profile_op.Base) = {}\n".format(
-                            profile_op.Base,
-                            type(profile_op.Base),
-                            len(profile_op.Base) if profile_op.Base else 0
-                        )
+                        f"    profile_op.Base = {profile_op.Base}\n"
+                        f"    type(profile_op.Base) = {type(profile_op.Base)}\n"
+                        f"    len(profile_op.Base) = {len(profile_op.Base) if profile_op.Base else 0}\n",
                     )
 
                 if profile_op.Base:
@@ -807,15 +773,11 @@ def create_profile_ops_for_top_loops():
                                 elem = base_obj.Shape.getElement(sub)
                                 if DEBUG:
                                     App.Console.PrintMessage(
-                                        "    VALID: {} -> {} = {}\n".format(
-                                            base_obj.Name, sub, type(elem).__name__
-                                        )
+                                        f"    VALID: {base_obj.Name} -> {sub} = {type(elem).__name__}\n",
                                     )
                             except Exception as e:  # noqa: BLE001
                                 App.Console.PrintError(
-                                    "    INVALID: {} -> {} ERROR: {}\n".format(
-                                        base_obj.Name, sub, e
-                                    )
+                                    f"    INVALID: {base_obj.Name} -> {sub} ERROR: {e}\n",
                                 )
 
                 profile_op.Direction = cut_direction
@@ -828,9 +790,7 @@ def create_profile_ops_for_top_loops():
 
                 if DEBUG:
                     App.Console.PrintMessage(
-                        "  Settings: Side='{}', Direction='{}', UseComp={}\n".format(
-                            profile_op.Side, profile_op.Direction, profile_op.UseComp
-                        )
+                        f"  Settings: Side='{profile_op.Side}', Direction='{profile_op.Direction}', UseComp={profile_op.UseComp}\n",
                     )
 
                 profile_op.ClearanceHeight = 5.0
@@ -845,37 +805,33 @@ def create_profile_ops_for_top_loops():
                     leadOut=leadOut,
                     styleIn=styleIn,
                     styleOut=styleOut,
-                    lengthMultiplier=lengthMultiplier
+                    lengthMultiplier=lengthMultiplier,
                 )
                 if dressup is not None:
                     if DEBUG:
                         App.Console.PrintMessage(
-                            "  [DRESSUP] Attached to '{}': {}\n".format(op_name, dressup.Name)
+                            f"  [DRESSUP] Attached to '{op_name}': {dressup.Name}\n",
                         )
                 else:
                     App.Console.PrintError(
-                        "  [DRESSUP] Failed to create dressup for '{}'\n".format(op_name)
+                        f"  [DRESSUP] Failed to create dressup for '{op_name}'\n",
                     )
 
                 if DEBUG:
                     App.Console.PrintMessage(
-                        "Created {} linked to {} ({} edges)\n".format(
-                            op_name, source_obj.Name, len(edge_names)
-                        )
+                        f"Created {op_name} linked to {source_obj.Name} ({len(edge_names)} edges)\n",
                     )
 
             if settings["concaveDetection"]:
                 if DEBUG:
                     App.Console.PrintMessage(
-                        "  [CONCAVE] Processing outer wire of face (normal_z={:.6f})\n".format(
-                            normal.z
-                        )
+                        f"  [CONCAVE] Processing outer wire of face (normal_z={normal.z:.6f})\n",
                     )
                 concave_chains = find_concave_chains(face.OuterWire, normal, settings["concaveDepthTol"])
                 concave_count = len(concave_chains)
                 if DEBUG:
                     App.Console.PrintMessage(
-                        "  Outer wire: {} concave indentation chain(s) found\n".format(concave_count)
+                        f"  Outer wire: {concave_count} concave indentation chain(s) found\n",
                     )
 
                 for chain in concave_chains:
@@ -884,20 +840,18 @@ def create_profile_ops_for_top_loops():
                         for edge in chain:
                             for idx, master_edge in enumerate(master_edges):
                                 if master_edge.isEqual(edge):
-                                    edge_names.append("Edge{}".format(idx + 1))
+                                    edge_names.append(f"Edge{idx + 1}")
                                     break
 
                         if DEBUG:
                             App.Console.PrintMessage(
-                                "  Concave chain: {} edges, matched: {}\n".format(
-                                    len(chain), len(edge_names)
-                                )
+                                f"  Concave chain: {len(chain)} edges, matched: {len(edge_names)}\n",
                             )
 
                         if len(edge_names) < 2:
                             if DEBUG:
                                 App.Console.PrintMessage(
-                                    "  [CONCAVE] Skipping chain: < 2 matched edges\n"
+                                    "  [CONCAVE] Skipping chain: < 2 matched edges\n",
                                 )
                             continue
 
@@ -914,38 +868,38 @@ def create_profile_ops_for_top_loops():
                                     if DEBUG:
                                         App.Console.PrintMessage(
                                             "  [CONCAVE] Skipping chain: forms closed wire "
-                                            "(will be mishandled as open profile)\n"
+                                            "(will be mishandled as open profile)\n",
                                         )
                                     continue
                         except Exception as e:  # noqa: BLE001
                             if DEBUG:
                                 App.Console.PrintMessage(
-                                    "  [CONCAVE] Wire validation failed: {}. Skipping chain.\n".format(e)
+                                    f"  [CONCAVE] Wire validation failed: {e}. Skipping chain.\n",
                                 )
                             continue
 
                         concave_total += 1
                         op_count += 1
-                        op_name = "Profile_Concave_{}".format(op_count)
+                        op_name = f"Profile_Concave_{op_count}"
 
                         if DEBUG:
                             App.Console.PrintMessage(
-                                "=== CREATING {} ===\n".format(op_name)
+                                f"=== CREATING {op_name} ===\n",
                             )
 
                         import Path.Op.Profile as PathProfileOp
                         profile_op = PathProfileOp.Create(op_name, parentJob=job)
                         if profile_op is None:
                             App.Console.PrintError(
-                                "  [CREATE] Profile.Create() returned None for '{}'\n".format(op_name)
+                                f"  [CREATE] Profile.Create() returned None for '{op_name}'\n",
                             )
                             continue
                         if DEBUG:
                             App.Console.PrintMessage(
                                 "  [CREATE] Created op: {}, type={}, hasProxy={}\n".format(
                                     profile_op.Name, type(profile_op).__name__,
-                                    hasattr(profile_op, "Proxy")
-                                )
+                                    hasattr(profile_op, "Proxy"),
+                                ),
                             )
 
                         if DEBUG:
@@ -955,13 +909,13 @@ def create_profile_ops_for_top_loops():
                                 "    op.Proxy = {}\n"
                                 "    op.Proxy.job = {}\n".format(
                                     profile_op.Base, profile_op.Proxy,
-                                    profile_op.Proxy.job if hasattr(profile_op.Proxy, 'job') else "N/A"
-                                )
+                                    profile_op.Proxy.job if hasattr(profile_op.Proxy, "job") else "N/A",
+                                ),
                             )
 
                         profile_op.ToolController = tool_controller
                         if DEBUG:
-                            App.Console.PrintMessage("  ToolController set to {}\n".format(tool_controller.Name))
+                            App.Console.PrintMessage(f"  ToolController set to {tool_controller.Name}\n")
 
                         import Path.Op.Gui.Base as PathOpGui
                         profile_op.ViewObject.Proxy = PathOpGui.ViewProvider(profile_op.ViewObject, res)
@@ -973,20 +927,16 @@ def create_profile_ops_for_top_loops():
 
                         if DEBUG:
                             App.Console.PrintMessage(
-                                "  Setting Base = {}\n".format(base_list)
+                                f"  Setting Base = {base_list}\n",
                             )
                         profile_op.Base = base_list
 
                         if DEBUG:
                             App.Console.PrintMessage(
                                 "  After assignment:\n"
-                                "    profile_op.Base = {}\n"
-                                "    type(profile_op.Base) = {}\n"
-                                "    len(profile_op.Base) = {}\n".format(
-                                    profile_op.Base,
-                                    type(profile_op.Base),
-                                    len(profile_op.Base) if profile_op.Base else 0
-                                )
+                                f"    profile_op.Base = {profile_op.Base}\n"
+                                f"    type(profile_op.Base) = {type(profile_op.Base)}\n"
+                                f"    len(profile_op.Base) = {len(profile_op.Base) if profile_op.Base else 0}\n",
                             )
 
                         if profile_op.Base:
@@ -996,15 +946,11 @@ def create_profile_ops_for_top_loops():
                                         elem = base_obj.Shape.getElement(sub)
                                         if DEBUG:
                                             App.Console.PrintMessage(
-                                                "    VALID: {} -> {} = {}\n".format(
-                                                    base_obj.Name, sub, type(elem).__name__
-                                                )
+                                                f"    VALID: {base_obj.Name} -> {sub} = {type(elem).__name__}\n",
                                             )
                                     except Exception as e:  # noqa: BLE001
                                         App.Console.PrintError(
-                                            "    INVALID: {} -> {} ERROR: {}\n".format(
-                                                base_obj.Name, sub, e
-                                            )
+                                            f"    INVALID: {base_obj.Name} -> {sub} ERROR: {e}\n",
                                         )
 
                         profile_op.Direction = cut_direction
@@ -1017,9 +963,7 @@ def create_profile_ops_for_top_loops():
 
                         if DEBUG:
                             App.Console.PrintMessage(
-                                "  Settings: Side='{}', Direction='{}', UseComp={}\n".format(
-                                    profile_op.Side, profile_op.Direction, profile_op.UseComp
-                                )
+                                f"  Settings: Side='{profile_op.Side}', Direction='{profile_op.Direction}', UseComp={profile_op.UseComp}\n",
                             )
 
                         profile_op.ClearanceHeight = 5.0
@@ -1034,28 +978,26 @@ def create_profile_ops_for_top_loops():
                             leadOut=leadOut,
                             styleIn=styleIn,
                             styleOut=styleOut,
-                            lengthMultiplier=lengthMultiplier
+                            lengthMultiplier=lengthMultiplier,
                         )
                         if dressup is not None:
                             if DEBUG:
                                 App.Console.PrintMessage(
-                                    "  [DRESSUP] Attached to '{}': {}\n".format(op_name, dressup.Name)
+                                    f"  [DRESSUP] Attached to '{op_name}': {dressup.Name}\n",
                                 )
                         else:
                             App.Console.PrintError(
-                                "  [DRESSUP] Failed to create dressup for '{}'\n".format(op_name)
+                                f"  [DRESSUP] Failed to create dressup for '{op_name}'\n",
                             )
 
                         if DEBUG:
                             App.Console.PrintMessage(
-                                "Created {} linked to {} ({} edges)\n".format(
-                                    op_name, source_obj.Name, len(edge_names)
-                                )
+                                f"Created {op_name} linked to {source_obj.Name} ({len(edge_names)} edges)\n",
                             )
 
                     except Exception as e:  # noqa: BLE001
                         App.Console.PrintError(
-                            "  [CONCAVE] ERROR processing chain: {}\n".format(e)
+                            f"  [CONCAVE] ERROR processing chain: {e}\n",
                         )
                         import traceback
                         App.Console.PrintError(traceback.format_exc())
@@ -1076,21 +1018,14 @@ def create_profile_ops_for_top_loops():
                     if "Dressup" in op.Name:
                         if DEBUG:
                             App.Console.PrintMessage(
-                                "Dressup '{}': Base={}, LeadIn={}, LeadOut={}, StyleIn={}, RadiusIn={}\n".format(
-                                    op.Name, op.Base, op.LeadIn, op.LeadOut, op.StyleIn, op.RadiusIn
-                                )
+                                f"Dressup '{op.Name}': Base={op.Base}, LeadIn={op.LeadIn}, LeadOut={op.LeadOut}, StyleIn={op.StyleIn}, RadiusIn={op.RadiusIn}\n",
                             )
-                    else:
-                        if DEBUG:
-                            App.Console.PrintMessage(
-                                "Op '{}': Base = {}, Side={}, Direction={}\n".format(
-                                    op.Name, op.Base, op.Side, op.Direction
-                                )
-                            )
+                    elif DEBUG:
+                        App.Console.PrintMessage(
+                            f"Op '{op.Name}': Base = {op.Base}, Side={op.Side}, Direction={op.Direction}\n",
+                        )
 
     if DEBUG:
         App.Console.PrintMessage(
-            "Finished! Created {} profile operations ({} closed loops, {} concave indentations).\n".format(
-                op_count, closed_loop_count, concave_total
-            )
+            f"Finished! Created {op_count} profile operations ({closed_loop_count} closed loops, {concave_total} concave indentations).\n",
         )
