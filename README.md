@@ -74,6 +74,8 @@ This addon uses the FreeCAD Workbench Manipulator pattern to contribute commands
 
 - https://freecad.github.io/Addon-Academy/Guides/Code/Manipulators/
 
+For detailed algorithm descriptions and architecture, see [DESIGN.md](DESIGN.md).
+
 ## License
 
 LGPL-2.1-or-later (see LICENSE-Code and LICENSE-Assets)

@@ -574,6 +574,137 @@ def find_concave_chains(wire, face_normal, concave_depth_tol=5.0):
         return []
 
 
+def create_profile_operation(op_name, job, tool_controller, edge_names, model_clone,
+                             offset_side, cut_direction, leadIn, leadOut, styleIn, styleOut,
+                             lengthMultiplier):
+    """Create a CAM Profile operation for the given edges and attach a LeadInOut dressup.
+
+    This is the shared factory used by both the closed-loop and concave-chain
+    code paths in create_profile_ops_for_top_loops().
+
+    Args:
+        op_name: Display name for the operation (e.g. "Profile_Loop_3").
+        job: The CAM Job DocumentObject that will own this operation.
+        tool_controller: A ToolController object defining the cutting tool.
+        edge_names: List of edge sub-element names (e.g. ["Edge1", "Edge2", "Edge3"])
+            referencing edges on model_clone.
+        model_clone: The model clone DocumentObject whose Shape contains the edges.
+        offset_side: "Inside", "Outside", or "None" — controls edge offset compensation.
+        cut_direction: "CW" or "CCW" — tool travel direction around the profile.
+        leadIn: Whether to enable LeadIn on the dressup.
+        leadOut: Whether to enable LeadOut on the dressup.
+        styleIn: LeadIn style string (e.g. "Perpendicular", "Tangent").
+        styleOut: LeadOut style string.
+        lengthMultiplier: LeadIn/Out length as a multiple of tool diameter.
+
+    Returns:
+        The created Profile DocumentObject, or None if creation failed.
+    """
+    import Path.Op.Profile as PathProfileOp
+    import Path.Op.Gui.Profile as PathProfileGui
+    import Path.Op.Gui.Base as PathOpGui
+
+    profile_op = PathProfileOp.Create(op_name, parentJob=job)
+    if profile_op is None:
+        App.Console.PrintError(f"  [CREATE] Profile.Create() returned None for '{op_name}'\n")
+        return None
+
+    if DEBUG:
+        _dbg(
+            "  [CREATE] Created op: {}, type={}, hasProxy={}\n".format(
+                profile_op.Name, type(profile_op).__name__,
+                hasattr(profile_op, "Proxy"),
+            ),
+        )
+        _dbg(
+            "  After Create:\n"
+            "    op.Base = {}\n"
+            "    op.Proxy = {}\n"
+            "    op.Proxy.job = {}\n".format(
+                profile_op.Base, profile_op.Proxy,
+                profile_op.Proxy.job if hasattr(profile_op.Proxy, "job") else "N/A",
+            ),
+        )
+
+    profile_op.ToolController = tool_controller
+    if DEBUG:
+        _dbg(f"  ToolController set to {tool_controller.Name}\n")
+
+    # PathProfileGui.Command.res provides the resource path required by the
+    # ViewProvider constructor. This is a FreeCAD convention for linking GUI
+    # view providers to their underlying command definitions.
+    res = PathProfileGui.Command.res
+    profile_op.ViewObject.Proxy = PathOpGui.ViewProvider(profile_op.ViewObject, res)
+    # Prevent FreeCAD from deleting this operation if the user rejects it in the GUI.
+    profile_op.ViewObject.Proxy.setDeleteObjectsOnReject(False)
+
+    # Build the Base assignment: each entry is a (DocumentObject, [sub-element names]) tuple.
+    # FreeCAD expects this format to associate geometric sub-elements with the operation.
+    base_list = []
+    for edge_name in edge_names:
+        base_list.append((model_clone, [edge_name]))
+
+    if DEBUG:
+        _dbg(f"  Setting Base = {base_list}\n")
+    profile_op.Base = base_list
+
+    if DEBUG:
+        _dbg(
+            "  After assignment:\n"
+            f"    profile_op.Base = {profile_op.Base}\n"
+            f"    type(profile_op.Base) = {type(profile_op.Base)}\n"
+            f"    len(profile_op.Base) = {len(profile_op.Base) if profile_op.Base else 0}\n",
+        )
+
+    if profile_op.Base:
+        for base_obj, subs in profile_op.Base:
+            for sub in subs:
+                try:
+                    elem = base_obj.Shape.getElement(sub)
+                    if DEBUG:
+                        _dbg(f"    VALID: {base_obj.Name} -> {sub} = {type(elem).__name__}\n")
+                except Exception as e:  # noqa: BLE001
+                    App.Console.PrintError(f"    INVALID: {base_obj.Name} -> {sub} ERROR: {e}\n")
+
+    profile_op.Direction = cut_direction
+    if offset_side == "None":
+        # No edge offset compensation — cut exactly on the edge geometry.
+        profile_op.UseComp = False
+        profile_op.OffsetExtra.Value = 0.0
+    else:
+        # Enable edge offset compensation (kerf correction).
+        profile_op.UseComp = True
+        profile_op.Side = "Inside" if offset_side == "Inside" else "Outside"
+
+    if DEBUG:
+        _dbg(
+            f"  Settings: Side='{profile_op.Side}', Direction='{profile_op.Direction}', UseComp={profile_op.UseComp}\n",
+        )
+
+    # Default cutting parameters (all values in mm).
+    profile_op.ClearanceHeight = 5.0   # Z-height for rapid travel above workpiece
+    profile_op.SafeHeight = 3.0       # Z-height for linear (non-rapid) travel
+    profile_op.StartDepth = 0.0       # Z-depth where cutting begins
+    profile_op.StepDown = 1.0         # Depth increment per pass (mm)
+    profile_op.FinalDepth = -2.0      # Final cutting depth (mm, negative = below surface)
+
+    dressup = add_leadinout_dressup(
+        profile_op,
+        leadIn=leadIn,
+        leadOut=leadOut,
+        styleIn=styleIn,
+        styleOut=styleOut,
+        lengthMultiplier=lengthMultiplier,
+    )
+    if dressup is not None:
+        if DEBUG:
+            _dbg(f"  [DRESSUP] Attached to '{op_name}': {dressup.Name}\n")
+    else:
+        App.Console.PrintError(f"  [DRESSUP] Failed to create dressup for '{op_name}'\n")
+
+    return profile_op
+
+
 def create_profile_ops_for_top_loops():
     """Create Profile operations for CAM Job top faces."""
     if DEBUG:
@@ -675,9 +806,6 @@ def create_profile_ops_for_top_loops():
             f"StyleIn={styleIn}, StyleOut={styleOut}, LengthMult={lengthMultiplier}\n",
         )
 
-    import Path.Op.Gui.Profile as PathProfileGui
-    res = PathProfileGui.Command.res
-
     from PathScripts import PathUtils
     op_count = 0
     closed_loop_count = 0
@@ -742,113 +870,13 @@ def create_profile_ops_for_top_loops():
                 closed_loop_count += 1
                 op_name = f"Profile_Loop_{op_count}"
 
-                if DEBUG:
-                    _dbg(
-                        f"=== CREATING {op_name} ===\n",
-                    )
-
-                import Path.Op.Profile as PathProfileOp
-                profile_op = PathProfileOp.Create(op_name, parentJob=job)
-                if profile_op is None:
-                    App.Console.PrintError(
-                        f"  [CREATE] Profile.Create() returned None for '{op_name}'\n",
-                    )
-                    continue
-                if DEBUG:
-                    _dbg(
-                        "  [CREATE] Created op: {}, type={}, hasProxy={}\n".format(
-                            profile_op.Name, type(profile_op).__name__,
-                            hasattr(profile_op, "Proxy"),
-                        ),
-                    )
-
-                if DEBUG:
-                    _dbg(
-                        "  After Create:\n"
-                        "    op.Base = {}\n"
-                        "    op.Proxy = {}\n"
-                        "    op.Proxy.job = {}\n".format(
-                            profile_op.Base, profile_op.Proxy,
-                            profile_op.Proxy.job if hasattr(profile_op.Proxy, "job") else "N/A",
-                        ),
-                    )
-
-                profile_op.ToolController = tool_controller
-                if DEBUG:
-                    _dbg(f"  ToolController set to {tool_controller.Name}\n")
-
-                import Path.Op.Gui.Base as PathOpGui
-                profile_op.ViewObject.Proxy = PathOpGui.ViewProvider(profile_op.ViewObject, res)
-                profile_op.ViewObject.Proxy.setDeleteObjectsOnReject(False)
-
-                base_list = []
-                for edge_name in edge_names:
-                    base_list.append((model_clone, [edge_name]))
-
-                if DEBUG:
-                    _dbg(
-                        f"  Setting Base = {base_list}\n",
-                    )
-                profile_op.Base = base_list
-
-                if DEBUG:
-                    _dbg(
-                        "  After assignment:\n"
-                        f"    profile_op.Base = {profile_op.Base}\n"
-                        f"    type(profile_op.Base) = {type(profile_op.Base)}\n"
-                        f"    len(profile_op.Base) = {len(profile_op.Base) if profile_op.Base else 0}\n",
-                    )
-
-                if profile_op.Base:
-                    for base_obj, subs in profile_op.Base:
-                        for sub in subs:
-                            try:
-                                elem = base_obj.Shape.getElement(sub)
-                                if DEBUG:
-                                    _dbg(
-                                        f"    VALID: {base_obj.Name} -> {sub} = {type(elem).__name__}\n",
-                                    )
-                            except Exception as e:  # noqa: BLE001
-                                App.Console.PrintError(
-                                    f"    INVALID: {base_obj.Name} -> {sub} ERROR: {e}\n",
-                                )
-
-                profile_op.Direction = cut_direction
-                if offset_side == "None":
-                    profile_op.UseComp = False
-                    profile_op.OffsetExtra.Value = 0.0
-                else:
-                    profile_op.UseComp = True
-                    profile_op.Side = "Inside" if offset_side == "Inside" else "Outside"
-
-                if DEBUG:
-                    _dbg(
-                        f"  Settings: Side='{profile_op.Side}', Direction='{profile_op.Direction}', UseComp={profile_op.UseComp}\n",
-                    )
-
-                profile_op.ClearanceHeight = 5.0
-                profile_op.SafeHeight = 3.0
-                profile_op.StartDepth = 0.0
-                profile_op.StepDown = 1.0
-                profile_op.FinalDepth = -2.0
-
-                dressup = add_leadinout_dressup(
-                    profile_op,
-                    leadIn=leadIn,
-                    leadOut=leadOut,
-                    styleIn=styleIn,
-                    styleOut=styleOut,
-                    lengthMultiplier=lengthMultiplier,
+                profile_op = create_profile_operation(
+                    op_name, job, tool_controller, edge_names, model_clone,
+                    offset_side, cut_direction, leadIn, leadOut, styleIn, styleOut,
+                    lengthMultiplier,
                 )
-                if dressup is not None:
-                    if DEBUG:
-                        _dbg(
-                            f"  [DRESSUP] Attached to '{op_name}': {dressup.Name}\n",
-                        )
-                else:
-                    App.Console.PrintError(
-                        f"  [DRESSUP] Failed to create dressup for '{op_name}'\n",
-                    )
+                if profile_op is None:
+                    continue
 
                 if DEBUG:
                     _dbg(
@@ -914,113 +942,13 @@ def create_profile_ops_for_top_loops():
                         op_count += 1
                         op_name = f"Profile_Concave_{op_count}"
 
-                        if DEBUG:
-                            _dbg(
-                                f"=== CREATING {op_name} ===\n",
-                            )
-
-                        import Path.Op.Profile as PathProfileOp
-                        profile_op = PathProfileOp.Create(op_name, parentJob=job)
-                        if profile_op is None:
-                            App.Console.PrintError(
-                                f"  [CREATE] Profile.Create() returned None for '{op_name}'\n",
-                            )
-                            continue
-                        if DEBUG:
-                            _dbg(
-                                "  [CREATE] Created op: {}, type={}, hasProxy={}\n".format(
-                                    profile_op.Name, type(profile_op).__name__,
-                                    hasattr(profile_op, "Proxy"),
-                                ),
-                            )
-
-                        if DEBUG:
-                            _dbg(
-                                "  After Create:\n"
-                                "    op.Base = {}\n"
-                                "    op.Proxy = {}\n"
-                                "    op.Proxy.job = {}\n".format(
-                                    profile_op.Base, profile_op.Proxy,
-                                    profile_op.Proxy.job if hasattr(profile_op.Proxy, "job") else "N/A",
-                                ),
-                            )
-
-                        profile_op.ToolController = tool_controller
-                        if DEBUG:
-                            _dbg(f"  ToolController set to {tool_controller.Name}\n")
-
-                        import Path.Op.Gui.Base as PathOpGui
-                        profile_op.ViewObject.Proxy = PathOpGui.ViewProvider(profile_op.ViewObject, res)
-                        profile_op.ViewObject.Proxy.setDeleteObjectsOnReject(False)
-
-                        base_list = []
-                        for edge_name in edge_names:
-                            base_list.append((model_clone, [edge_name]))
-
-                        if DEBUG:
-                            _dbg(
-                                f"  Setting Base = {base_list}\n",
-                            )
-                        profile_op.Base = base_list
-
-                        if DEBUG:
-                            _dbg(
-                                "  After assignment:\n"
-                                f"    profile_op.Base = {profile_op.Base}\n"
-                                f"    type(profile_op.Base) = {type(profile_op.Base)}\n"
-                                f"    len(profile_op.Base) = {len(profile_op.Base) if profile_op.Base else 0}\n",
-                            )
-
-                        if profile_op.Base:
-                            for base_obj, subs in profile_op.Base:
-                                for sub in subs:
-                                    try:
-                                        elem = base_obj.Shape.getElement(sub)
-                                        if DEBUG:
-                                            _dbg(
-                                                f"    VALID: {base_obj.Name} -> {sub} = {type(elem).__name__}\n",
-                                            )
-                                    except Exception as e:  # noqa: BLE001
-                                        App.Console.PrintError(
-                                            f"    INVALID: {base_obj.Name} -> {sub} ERROR: {e}\n",
-                                        )
-
-                        profile_op.Direction = cut_direction
-                        if offset_side == "None":
-                            profile_op.UseComp = False
-                            profile_op.OffsetExtra.Value = 0.0
-                        else:
-                            profile_op.UseComp = True
-                            profile_op.Side = "Inside" if offset_side == "Inside" else "Outside"
-
-                        if DEBUG:
-                            _dbg(
-                                f"  Settings: Side='{profile_op.Side}', Direction='{profile_op.Direction}', UseComp={profile_op.UseComp}\n",
-                            )
-
-                        profile_op.ClearanceHeight = 5.0
-                        profile_op.SafeHeight = 3.0
-                        profile_op.StartDepth = 0.0
-                        profile_op.StepDown = 1.0
-                        profile_op.FinalDepth = -2.0
-
-                        dressup = add_leadinout_dressup(
-                            profile_op,
-                            leadIn=leadIn,
-                            leadOut=leadOut,
-                            styleIn=styleIn,
-                            styleOut=styleOut,
-                            lengthMultiplier=lengthMultiplier,
+                        profile_op = create_profile_operation(
+                            op_name, job, tool_controller, edge_names, model_clone,
+                            offset_side, cut_direction, leadIn, leadOut, styleIn, styleOut,
+                            lengthMultiplier,
                         )
-                        if dressup is not None:
-                            if DEBUG:
-                                _dbg(
-                                    f"  [DRESSUP] Attached to '{op_name}': {dressup.Name}\n",
-                                )
-                        else:
-                            App.Console.PrintError(
-                                f"  [DRESSUP] Failed to create dressup for '{op_name}'\n",
-                            )
+                        if profile_op is None:
+                            continue
 
                         if DEBUG:
                             _dbg(
