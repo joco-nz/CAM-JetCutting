@@ -2,7 +2,7 @@
 # SPDX-FileNotice: Part of CAM-JetCutting
 
 [project]
-version = "1.0.0"
+version = "1.1.0"
 name = "CAM-JetCutting"
 requires-python = ">=3.11"
 dependencies = []
