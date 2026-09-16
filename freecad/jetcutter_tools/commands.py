@@ -425,7 +425,7 @@ def add_leadinout_dressup(profile_op, leadIn=True, leadOut=False, styleIn="Perpe
                 f"  [DRESSUP] Set LeadIn={dressup.LeadIn}, LeadOut={dressup.LeadOut}, StyleIn={dressup.StyleIn}, StyleOut={dressup.StyleOut}\n",
             )
 
-        import Path.Dressup as PathDressup
+        from Path.Dressup import Utils as PathDressup
         baseOp = PathDressup.baseOp(dressup.Base)
         if baseOp and getattr(baseOp, "ToolController", None):
             expr = f"{baseOp.Name}.ToolController.Tool.Diameter.Value*{lengthMultiplier}"
