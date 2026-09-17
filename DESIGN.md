@@ -317,33 +317,40 @@ if concave_indices[0] == len(edges) - 1 and concave_indices[1] == 0:
 **Regular indentation** — a notch on the right edge:
 
 ```
-   +--------+
-   |        |
-   |        |
-   |     +--+
-   |     |
-   |     |
-   |     +--+
-   |        |
-   |        |
-   +--------+
++----0----+
+|         |
+|         1
+|         |
+|     +-2-+
+|     |
+7     3 
+|     |
+|     +-4-+
+|         |
+|         5
+|         |
++----6----+
 ```
 
-The notch creates concave edges 3, 4, 5 whose vertices extend inward past the depth tolerance. These form chain `[3, 4, 5]`.
+The notch creates concave edges 2, 3, 4 whose vertices extend inward past the depth tolerance. These form chain `[2, 3, 4]`.
 
 **Wrap-around indentation** — a notch at the corner, spanning from the last edge to the first edge of the wire:
 
 ```
-   +-----+
-   |     |
-   |     |
-   |     +--+
-   |        |
-   |        |
-   +--------+
++---4---+
+|       |
+|       5
+|       |
+3       +-0-+
+|           |
+|           1
+|           |
++-----2-----+
 ```
 
-The notch creates concave edges 8, 0, 1. Since `concave_indices[0] == len(edges) - 1` (8 == 8) and `concave_indices[1] == 0`, the chain wraps around the wire boundary and is merged into a single chain `[8, 0, 1]`.
+The notch creates concave edges 0, 5 whose lines extend inside the bounding box. Edges 1, 2, 3, 4 lie on the bounding box and are excluded. These form chain `[0, 5]`.
+
+The problem: the chain formation loop iterates 0→1→2→3→4→5, so it finds edge 0 first, then edge 5. Since 5 ≠ 0+1, it starts a new chain. Result: `[0]` (discarded) and `[5]` (discarded). The wrap-around check `concave_indices[0] == len(edges) - 1 and concave_indices[1] == 0` evaluates to `0 == 5 and 5 == 0` → False, so it never triggers.
 
 #### Mermaid diagram — concave detection flow
 

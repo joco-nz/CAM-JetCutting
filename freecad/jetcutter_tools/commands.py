@@ -554,13 +554,30 @@ def find_concave_chains(wire, face_normal, concave_depth_tol=5.0):
         if len(current_chain) >= 2:
             chains.append([edges[idx] for idx in current_chain])
 
-        if concave_indices[0] == len(edges) - 1 and concave_indices[1] == 0:
-            wrap_chain = [edges[idx] for idx in concave_indices]
-            if DEBUG:
-                _dbg(
-                    f"  [CONCAVE_CHAINS] Full-wire wrap: {len(wrap_chain)} edges\n",
-                )
-            chains = [wrap_chain]
+        # Check if concave edges wrap around the wire boundary
+        if len(concave_indices) >= 2:
+            first_idx = concave_indices[0]
+            last_idx = concave_indices[-1]
+
+            # Case 1: chain starts at last edge and continues at first edge
+            # e.g., [8, 0, 1, 2]
+            if first_idx == len(edges) - 1 and concave_indices[1] == 0:
+                wrap_chain = [edges[idx] for idx in concave_indices]
+                if DEBUG:
+                    _dbg(
+                        f"  [CONCAVE_CHAINS] Full-wire wrap: {len(wrap_chain)} edges\n",
+                    )
+                chains = [wrap_chain]
+
+            # Case 2: chain starts at first edge and wraps to last edge
+            # e.g., [0, 5] or [0, 1, 5]
+            elif first_idx == 0 and last_idx == len(edges) - 1:
+                wrap_chain = [edges[idx] for idx in concave_indices]
+                if DEBUG:
+                    _dbg(
+                        f"  [CONCAVE_CHAINS] Full-wire wrap: {len(wrap_chain)} edges\n",
+                    )
+                chains = [wrap_chain]
 
         if DEBUG:
             _dbg(
