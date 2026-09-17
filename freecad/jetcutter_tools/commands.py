@@ -4,6 +4,13 @@ import os
 import FreeCAD as App
 import FreeCADGui as Gui
 
+try:
+    from PySide import QtGui, QtCore
+    from PySide.QtGui import QApplication, QProgressDialog
+except ImportError:
+    from PySide6 import QtWidgets, QtCore
+    from PySide6.QtWidgets import QApplication, QProgressDialog
+
 DEBUG = False
 _DEBUG_LOG = os.path.join(os.environ.get("TMPDIR", "/tmp"), "find_profiles_debug.log")
 
@@ -722,6 +729,22 @@ def create_profile_operation(op_name, job, tool_controller, edge_names, model_cl
     return profile_op
 
 
+def create_progress_dialog(max_value):
+    """Create and return a QProgressDialog for the Find Profiles operation."""
+    dialog = QProgressDialog(
+        "Starting analysis...",
+        "Cancel",
+        0,
+        max_value,
+        Gui.getMainWindow(),
+    )
+    dialog.setWindowModality(QtCore.Qt.WindowModal)
+    dialog.setMinimumDuration(0)
+    dialog.show()
+    QApplication.processEvents()
+    return dialog
+
+
 def create_profile_ops_for_top_loops():
     """Create Profile operations for CAM Job top faces."""
     if DEBUG:
@@ -823,6 +846,20 @@ def create_profile_ops_for_top_loops():
             f"StyleIn={styleIn}, StyleOut={styleOut}, LengthMult={lengthMultiplier}\n",
         )
 
+    # Count total wires for progress bar granularity
+    total_wires = 0
+    for face, normal in top_faces:
+        outer_hash = face.OuterWire.hashCode()
+        for wire in face.Wires:
+            if wire.hashCode() == outer_hash:
+                continue
+            if not wire.isClosed():
+                continue
+            total_wires += 1
+
+    if DEBUG:
+        _dbg(f"Total wires to process: {total_wires}\n")
+
     from PathScripts import PathUtils
     op_count = 0
     closed_loop_count = 0
@@ -842,17 +879,35 @@ def create_profile_ops_for_top_loops():
     try:
         doc.openTransaction("Create Profile Loops")
 
-        for face, normal in top_faces:
+        # Create progress dialog
+        progress_dialog = create_progress_dialog(total_wires)
+        wire_progress = 0
+        cancelled_list = [False]
+
+        def on_dialog_closed(_result=0):
+            cancelled_list[0] = True
+
+        progress_dialog.finished.connect(on_dialog_closed)
+
+        for face_idx, (face, normal) in enumerate(top_faces):
+            if cancelled_list[0]:
+                break
+
             if DEBUG:
                 _dbg(
                     f"  Processing face with normal_z={normal.z:.6f}\n",
                 )
             outer_hash = face.OuterWire.hashCode()
             for wire in face.Wires:
+                if cancelled_list[0]:
+                    break
+
                 if wire.hashCode() == outer_hash:
                     continue
                 if not wire.isClosed():
                     continue
+
+                wire_progress += 1
 
                 if DEBUG:
                     _dbg(
@@ -881,11 +936,22 @@ def create_profile_ops_for_top_loops():
                     )
 
                 if len(edge_names) < 2:
+                    # Update progress even for skipped wires
+                    progress_dialog.setValue(wire_progress)
+                    progress_dialog.setLabelText(
+                        f"Processing face {face_idx + 1} of {len(top_faces)}"
+                    )
+                    QApplication.processEvents()
                     continue
 
                 op_count += 1
                 closed_loop_count += 1
                 op_name = f"Profile_Loop_{op_count}"
+
+                progress_dialog.setLabelText(
+                    f"Creating {op_name}..."
+                )
+                QApplication.processEvents()
 
                 profile_op = create_profile_operation(
                     op_name, job, tool_controller, edge_names, model_clone,
@@ -900,7 +966,23 @@ def create_profile_ops_for_top_loops():
                         f"Created {op_name} linked to {source_obj.Name} ({len(edge_names)} edges)\n",
                     )
 
+                progress_dialog.setValue(wire_progress)
+                progress_dialog.setLabelText(
+                    f"Processing face {face_idx + 1} of {len(top_faces)} — {op_name} created"
+                )
+                QApplication.processEvents()
+
+                if progress_dialog.wasCanceled():
+                    cancelled_list[0] = True
+                    break
+
+            if cancelled_list[0]:
+                break
+
             if settings["concaveDetection"]:
+                if cancelled_list[0]:
+                    break
+
                 if DEBUG:
                     _dbg(
                         f"  [CONCAVE] Processing outer wire of face (normal_z={normal.z:.6f})\n",
@@ -913,6 +995,9 @@ def create_profile_ops_for_top_loops():
                     )
 
                 for chain in concave_chains:
+                    if cancelled_list[0]:
+                        break
+
                     try:
                         edge_names = []
                         for edge in chain:
@@ -959,6 +1044,11 @@ def create_profile_ops_for_top_loops():
                         op_count += 1
                         op_name = f"Profile_Concave_{op_count}"
 
+                        progress_dialog.setLabelText(
+                            f"Creating {op_name}..."
+                        )
+                        QApplication.processEvents()
+
                         profile_op = create_profile_operation(
                             op_name, job, tool_controller, edge_names, model_clone,
                             offset_side, cut_direction, leadIn, leadOut, styleIn, styleOut,
@@ -971,6 +1061,16 @@ def create_profile_ops_for_top_loops():
                             _dbg(
                                 f"Created {op_name} linked to {source_obj.Name} ({len(edge_names)} edges)\n",
                             )
+
+                        progress_dialog.setValue(wire_progress)
+                        progress_dialog.setLabelText(
+                            f"Processing face {face_idx + 1} of {len(top_faces)} — {op_name} created"
+                        )
+                        QApplication.processEvents()
+
+                        if progress_dialog.wasCanceled():
+                            cancelled_list[0] = True
+                            break
 
                     except Exception as e:  # noqa: BLE001
                         App.Console.PrintError(
@@ -985,6 +1085,16 @@ def create_profile_ops_for_top_loops():
     finally:
         PathUtils.UserInput = original_UserInput
         Gui.Control.closeDialog()
+
+    if cancelled_list[0]:
+        App.Console.PrintWarning(
+            f"Operation cancelled. Created {op_count} profile operations.\n"
+        )
+    else:
+        App.Console.PrintMessage(
+            f"Finished! Created {op_count} profile operations "
+            f"({closed_loop_count} closed loops, {concave_total} concave indentations).\n"
+        )
 
     if DEBUG:
         _dbg("\n=== POST-CREATION VERIFICATION ===\n")
