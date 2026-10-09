@@ -1,8 +1,11 @@
 """GuiCommand classes for JetCutter Tools."""
 
 import os
+
 import FreeCAD as App
 import FreeCADGui as Gui
+
+from . import geometry
 
 try:
     from PySide import QtGui, QtCore
@@ -17,6 +20,12 @@ _DEBUG_LOG = os.path.join(os.environ.get("TMPDIR", "/tmp"), "find_profiles_debug
 def _dbg(msg):
     with open(_DEBUG_LOG, "a") as f:
         f.write(msg)
+
+
+# Give geometry.py the same debug switch and sink, so there is one place that
+# decides whether debug output happens at all. Done here rather than in geometry
+# because _dbg is defined above and the flag is read at call time.
+geometry.configure(debug=DEBUG, logger=_dbg)
 
 
 # ============================================================================
@@ -468,134 +477,17 @@ def add_leadinout_dressup(profile_op, leadIn=True, leadOut=False, styleIn="Perpe
         return None
 
 
-def is_concave_indentation(edge, bb_min_x, bb_max_x, bb_min_y, bb_max_y, depth_tol):
-    """Check if an edge is a concave indentation."""
-    try:
-        verts = edge.Vertexes
-        if not verts:
-            return False
-
-        any_deep = False
-        for v in verts:
-            dist = min(
-                v.X - bb_min_x,
-                bb_max_x - v.X,
-                v.Y - bb_min_y,
-                bb_max_y - v.Y,
-            )
-            if dist > depth_tol:
-                any_deep = True
-                break
-
-        return any_deep
-    except (AttributeError, IndexError) as e:
-        if DEBUG:
-            _dbg(
-                f"  [CONCAVE] Edge vertex access error: {e}\n",
-            )
-        return False
-
-
-def find_concave_chains(wire, face_normal, concave_depth_tol=5.0):
-    """Find edge chains forming concave indentations in a wire."""
-    try:
-        if DEBUG:
-            _dbg("  [CONCAVE_CHAINS] Starting concave chain detection\n")
-        edges = wire.Edges
-        if DEBUG:
-            _dbg(
-                f"  [CONCAVE_CHAINS] Wire has {len(edges)} edges, normal_z={face_normal.z:.6f}\n",
-            )
-        if len(edges) < 2:
-            if DEBUG:
-                _dbg("  [CONCAVE_CHAINS] Not enough edges (< 2), returning []\n")
-            return []
-
-        bb_min_x = bb_min_y = float("inf")
-        bb_max_x = bb_max_y = float("-inf")
-        for edge in edges:
-            for v in edge.Vertexes:
-                bb_min_x = min(bb_min_x, v.X)
-                bb_max_x = max(bb_max_x, v.X)
-                bb_min_y = min(bb_min_y, v.Y)
-                bb_max_y = max(bb_max_y, v.Y)
-
-        if DEBUG:
-            _dbg(
-                f"  [CONCAVE_CHAINS] Bounding box: x=[{bb_min_x:.2f}, {bb_max_x:.2f}], y=[{bb_min_y:.2f}, {bb_max_y:.2f}], concaveDepthTol={concave_depth_tol:.1f}\n",
-            )
-
-        concave_indices = []
-        for i, edge in enumerate(edges):
-            is_concave = is_concave_indentation(edge, bb_min_x, bb_max_x, bb_min_y, bb_max_y, concave_depth_tol)
-            if is_concave:
-                concave_indices.append(i)
-            if DEBUG:
-                _dbg(
-                    f"  [CONCAVE] Edge{i + 1}: index={i}, concave={is_concave}\n",
-                )
-
-        if DEBUG:
-            _dbg(
-                f"  [CONCAVE_CHAINS] Found {len(concave_indices)} concave edge(s) at indices: {concave_indices}\n",
-            )
-        if DEBUG:
-            _dbg(
-                f"  [CONCAVE_CHAINS] Boundary edges: {len(edges) - len(concave_indices)}, Concave edges: {len(concave_indices)}\n",
-            )
-
-        if len(concave_indices) < 2:
-            if DEBUG:
-                _dbg("  [CONCAVE_CHAINS] Need at least 2 concave edges, returning []\n")
-            return []
-
-        chains = []
-        current_chain = [concave_indices[0]]
-        for j in range(1, len(concave_indices)):
-            if concave_indices[j] == concave_indices[j - 1] + 1:
-                current_chain.append(concave_indices[j])
-            else:
-                if len(current_chain) >= 2:
-                    chains.append([edges[idx] for idx in current_chain])
-                current_chain = [concave_indices[j]]
-        if len(current_chain) >= 2:
-            chains.append([edges[idx] for idx in current_chain])
-
-        # Check if concave edges wrap around the wire boundary
-        if len(concave_indices) >= 2:
-            first_idx = concave_indices[0]
-            last_idx = concave_indices[-1]
-
-            # Case 1: chain starts at last edge and continues at first edge
-            # e.g., [8, 0, 1, 2]
-            if first_idx == len(edges) - 1 and concave_indices[1] == 0:
-                wrap_chain = [edges[idx] for idx in concave_indices]
-                if DEBUG:
-                    _dbg(
-                        f"  [CONCAVE_CHAINS] Full-wire wrap: {len(wrap_chain)} edges\n",
-                    )
-                chains = [wrap_chain]
-
-            # Case 2: chain starts at first edge and wraps to last edge
-            # e.g., [0, 5] or [0, 1, 5]
-            elif first_idx == 0 and last_idx == len(edges) - 1:
-                wrap_chain = [edges[idx] for idx in concave_indices]
-                if DEBUG:
-                    _dbg(
-                        f"  [CONCAVE_CHAINS] Full-wire wrap: {len(wrap_chain)} edges\n",
-                    )
-                chains = [wrap_chain]
-
-        if DEBUG:
-            _dbg(
-                f"  [CONCAVE_CHAINS] Returning {len(chains)} valid chain(s)\n",
-            )
-        return chains
-    except Exception as e:  # noqa: BLE001
-        App.Console.PrintError(f"  [CONCAVE_CHAINS] ERROR: {e}\n")
-        import traceback
-        App.Console.PrintError(traceback.format_exc())
-        return []
+# Concave-detection geometry lives in geometry.py so it can be tested without
+# a FreeCAD, Qt or GUI import (CR-03). Re-exported here because these names are
+# used throughout this module and by callers of it.
+from .geometry import (  # noqa: E402,F401  (re-exported for existing call sites)
+    _MIN_CONCAVE_CHAIN,
+    find_concave_chains,
+    group_concave_chains,
+    is_concave_indentation,
+    is_contiguous_run,
+    validate_chain_edges,
+)
 
 
 def create_profile_operation(op_name, job, tool_controller, edge_names, model_clone,
@@ -705,12 +597,19 @@ def create_profile_operation(op_name, job, tool_controller, edge_names, model_cl
             f"  Settings: Side='{profile_op.Side}', Direction='{profile_op.Direction}', UseComp={profile_op.UseComp}\n",
         )
 
-    # Default cutting parameters (all values in mm).
-    profile_op.ClearanceHeight = 5.0   # Z-height for rapid travel above workpiece
-    profile_op.SafeHeight = 3.0       # Z-height for linear (non-rapid) travel
-    profile_op.StartDepth = 0.0       # Z-depth where cutting begins
-    profile_op.StepDown = 1.0         # Depth increment per pass (mm)
-    profile_op.FinalDepth = -2.0      # Final cutting depth (mm, negative = below surface)
+    # Z properties are deliberately NOT set here.
+    #
+    # On jet cutting machines (plasma/laser/waterjet) the CNC controller owns the
+    # Z axis, and a post-processor reads StartDepth/FinalDepth as the pierce and
+    # cut heights, emitting them as machine metadata. Those are machine/torch
+    # facts, not part geometry, and they will eventually live on the
+    # ToolController. Deriving them from the model leaks the part's Z into the
+    # machine header (a pierce height of 51mm on a part sitting at Z=50).
+    #
+    # FreeCAD binds stock-anchored expressions to these properties at creation
+    # time, and a plain assignment would be silently discarded anyway.
+    #
+    # See DESIGN.md -> "Jet Cutting Premise".
 
     dressup = add_leadinout_dressup(
         profile_op,
@@ -730,7 +629,16 @@ def create_profile_operation(op_name, job, tool_controller, edge_names, model_cl
 
 
 def create_progress_dialog(max_value):
-    """Create and return a QProgressDialog for the Find Profiles operation."""
+    """Create and return a QProgressDialog for the Find Profiles operation.
+
+    ``autoReset`` is disabled deliberately. With the default ``True``, reaching
+    ``maximum`` makes the dialog reset itself, which both hides it — taking the
+    Cancel button away from the user for the rest of the run — and clears
+    ``wasCanceled()``. Cancellation is tracked from the ``canceled`` signal
+    rather than by polling ``wasCanceled()``, because the signal is a latch and
+    the flag is not. Keeping the dialog alive to the end is what lets the
+    caller close it explicitly instead of leaving it to the garbage collector.
+    """
     dialog = QProgressDialog(
         "Starting analysis...",
         "Cancel",
@@ -740,6 +648,7 @@ def create_progress_dialog(max_value):
     )
     dialog.setWindowModality(QtCore.Qt.WindowModal)
     dialog.setMinimumDuration(0)
+    dialog.setAutoReset(False)
     dialog.show()
     QApplication.processEvents()
     return dialog
@@ -876,6 +785,10 @@ def create_profile_ops_for_top_loops():
 
     PathUtils.UserInput = SilentToolControllerChooser()
 
+    # Pre-initialised so the `finally` block can close the dialog even if
+    # creating it, or opening the transaction, raised.
+    progress_dialog = None
+
     try:
         doc.openTransaction("Create Profile Loops")
 
@@ -884,10 +797,23 @@ def create_profile_ops_for_top_loops():
         wire_progress = 0
         cancelled_list = [False]
 
-        def on_dialog_closed(_result=0):
+        # Cancellation is tracked from signals, not by polling wasCanceled().
+        #
+        # Every user action on a QProgressDialog — the Cancel button, the window
+        # close button, and Escape — emits `canceled`. None of them emits
+        # `finished`; that signal only fires for accept()/reject(), which this
+        # dialog never triggers. So `finished` is kept only as a backstop for a
+        # programmatic close, and `canceled` is what actually carries user intent.
+        #
+        # Signals rather than the flag because they latch: `wasCanceled()` is
+        # cleared by reset(), and the dialog reaching its maximum used to reset
+        # it, so a cancel arriving on the final wire was discarded before the
+        # poll could observe it. A signal cannot lose that race.
+        def on_dialog_cancelled(*_args):
             cancelled_list[0] = True
 
-        progress_dialog.finished.connect(on_dialog_closed)
+        progress_dialog.canceled.connect(on_dialog_cancelled)
+        progress_dialog.finished.connect(on_dialog_cancelled)
 
         for face_idx, (face, normal) in enumerate(top_faces):
             if cancelled_list[0]:
@@ -972,8 +898,7 @@ def create_profile_ops_for_top_loops():
                 )
                 QApplication.processEvents()
 
-                if progress_dialog.wasCanceled():
-                    cancelled_list[0] = True
+                if cancelled_list[0]:
                     break
 
             if cancelled_list[0]:
@@ -1022,17 +947,38 @@ def create_profile_ops_for_top_loops():
                             matched_edges = []
                             for edge_name in edge_names:
                                 elem = model_clone.Shape.getElement(edge_name)
-                                if elem:
+                                if not elem.isNull():
                                     matched_edges.append(elem)
-                            if len(matched_edges) >= 2:
-                                test_wire = Part.Wire(Part.__sortEdges__(matched_edges))
-                                if test_wire.isClosed():
-                                    if DEBUG:
-                                        _dbg(
-                                            "  [CONCAVE] Skipping chain: forms closed wire "
-                                            "(will be mishandled as open profile)\n",
-                                        )
-                                    continue
+
+                            # Both guards live in validate_chain_edges(), which
+                            # decides contiguity BEFORE sorting. That ordering is
+                            # the whole point: Part.__sortEdges__ repairs
+                            # disconnected edges into one connected sequence, so
+                            # a check applied to sorted edges always passes and
+                            # the guard could never fire (CR-11). Keeping it in
+                            # one testable function stops the two steps drifting
+                            # apart again.
+                            # The sorted edges are not needed here: the caller
+                            # re-resolves each edge name against the clone, and
+                            # only the verdict matters.
+                            ok, _ordered, reason = validate_chain_edges(
+                                matched_edges,
+                                sort_fn=Part.__sortEdges__,
+                                wire_fn=Part.Wire,
+                                is_closed_fn=lambda wire: wire.isClosed(),
+                            )
+                            if not ok:
+                                if reason == "not_contiguous":
+                                    App.Console.PrintWarning(
+                                        f"  [CONCAVE] Skipping a non-contiguous "
+                                        f"chain of {len(matched_edges)} edges — it "
+                                        f"spans more than one feature. Concave "
+                                        f"detection may have merged neighbouring "
+                                        f"indentations.\n",
+                                    )
+                                elif DEBUG:
+                                    _dbg(f"  [CONCAVE] Skipping chain: {reason}\n")
+                                continue
                         except Exception as e:  # noqa: BLE001
                             if DEBUG:
                                 _dbg(
@@ -1068,8 +1014,7 @@ def create_profile_ops_for_top_loops():
                         )
                         QApplication.processEvents()
 
-                        if progress_dialog.wasCanceled():
-                            cancelled_list[0] = True
+                        if cancelled_list[0]:
                             break
 
                     except Exception as e:  # noqa: BLE001
@@ -1084,6 +1029,14 @@ def create_profile_ops_for_top_loops():
         doc.recompute()
     finally:
         PathUtils.UserInput = original_UserInput
+        # The progress dialog is a bare QProgressDialog, never registered with
+        # Gui.Control, so Gui.Control.closeDialog() cannot be the thing that
+        # dismisses it. Close it directly instead of leaving it to the garbage
+        # collector, which can otherwise leave a window on screen after the
+        # command returns.
+        if progress_dialog is not None:
+            progress_dialog.close()
+            progress_dialog.deleteLater()
         Gui.Control.closeDialog()
 
     if cancelled_list[0]:

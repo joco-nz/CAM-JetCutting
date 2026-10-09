@@ -66,3 +66,26 @@ ignore = [
     # Boolean defaults required by FreeCAD API
     "FBT002",
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = [
+    # The freecadcmd/gui scripts must put their own directory on sys.path before
+    # importing harness_common, and set up FreeCAD before importing the addon, so
+    # those imports cannot be at the top of the file.
+    "E402",
+    # The harness scripts report with %-format so output stays readable next to
+    # the surrounding FreeCAD console noise.
+    "UP031",
+    # Test and harness functions take `report`-style parameters they do not use,
+    # and `body()` is a fixed entry-point signature the runner calls.
+    "ARG001",
+    "ARG005",
+    # Teardown must survive anything the test body did: a failed close or a
+    # half-built document must not mask the result being reported.
+    "BLE001",
+    "SIM105",
+    # os.path is used for clarity where a path is being handed to FreeCAD.
+    "PTH100",
+    "PTH103",
+    "PTH123",
+]
