@@ -6,25 +6,115 @@ Architecture, algorithms, and FreeCAD integration details for the JetCutter Tool
 
 ## Table of Contents
 
-1. [Architecture](#architecture)
+1. [Jet Cutting Premise](#jet-cutting-premise)
+   - [Z is a machine value, not a part value](#z-is-a-machine-value-not-a-part-value)
+   - [Operation property meanings](#operation-property-meanings)
+   - [Ownership of pierce and cut heights](#ownership-of-pierce-and-cut-heights)
+   - [Rules for contributors](#rules-for-contributors)
+2. [Architecture](#architecture)
    - [Addon bootstrap](#addon-bootstrap)
    - [Workbench manipulator pattern](#workbench-manipulator-pattern)
    - [Command registration flow](#command-registration-flow)
-2. [SameEdgesAsHighlighted](#sameedgesashighlighted)
+3. [SameEdgesAsHighlighted](#sameedgesashighlighted)
    - [Algorithm overview](#algorithm-overview)
    - [Matching criteria](#matching-criteria)
    - [Visibility traversal](#visibility-traversal)
    - [Complexity](#complexity-1)
-3. [FindProfiles](#findprofiles)
+4. [FindProfiles](#findprofiles)
    - [Algorithm overview](#algorithm-overview-1)
    - [Top face detection](#top-face-detection)
    - [Edge matching via hashCode](#edge-matching-via-hashcode)
    - [Closed loop detection](#closed-loop-detection)
    - [Profile operation creation](#profile-operation-creation)
    - [Concave indentation detection](#concave-indentation-detection)
-   - [Wire-closed validation](#wire-closed-validation)
+   - [Wire-contiguity validation](#wire-contiguity-validation)
    - [Complexity](#complexity-2)
-4. [Constants & Configuration](#constants--configuration)
+5. [Constants & Configuration](#constants--configuration)
+
+---
+
+## Jet Cutting Premise
+
+**Read this section before changing anything related to Z.**
+
+This addon targets jet cutting machines: **plasma, laser and waterjet**. Two properties of those
+machines drive most of the design decisions in this document.
+
+### Z is a machine value, not a part value
+
+**The CNC controller owns the Z axis.** The cut is single-pass — there is no stepdown — and the physical
+height of the cutting nozzle is determined by factors the controller corrects dynamically on the machine
+(torch height control, capacitive sensing, autofocus, kerf-dependent standoff). The CAM never decides it.
+
+The consequence is that a Profile operation's Z is **not part geometry**. It is not a position above the
+workpiece, and the absolute numbers do not correspond to anything physical on the model.
+
+It is worth being precise about the common shorthand here, because the shorthand is wrong in an important
+way. Z is not simply "dropped by the post-processor" — for a jet-capable post it is **repurposed**. The
+post-processor reads the depth properties and uses them as the parameters of a three-state torch machine,
+then emits them as machine setup metadata in the G-code header.
+
+For example, the plasma post-processor reads:
+
+```
+pierce_height = op.StartDepth     (fallback 3.5 mm)
+cut_height    = op.FinalDepth     (fallback 1.5 mm)
+```
+
+and emits `ph=` and `ch=` alongside `kw=` (kerf), `mt=` (material thickness), `fr=` (feed), `th=` (THC
+state) and `pd=` (pierce delay). FreeCAD's bundled `Path/Post/scripts/generic_plasma_post.py` uses the same
+properties for the same purpose, and additionally uses `ClearanceHeight` as its retract height.
+
+So the correct statement is:
+
+> CAM Z is irrelevant to **positioning** — the controller sets the real height. But `StartDepth`,
+> `FinalDepth` and `ClearanceHeight` are **consumed by the post-processor as machine parameters**, and the
+> values written into them are the ones the machine will be told.
+
+### Operation property meanings
+
+| Property | Meaning for jet cutting | Who owns the value |
+|----------|-------------------------|--------------------|
+| `StartDepth` | Pierce height — torch standoff before cutting | Post-processor / ToolController |
+| `FinalDepth` | Cut height — torch standoff while cutting | Post-processor / ToolController |
+| `ClearanceHeight` | Retract height; post emits `G0` to this between operations | FreeCAD (stock-anchored expression) |
+| `SafeHeight` | Feed-travel height | FreeCAD (stock-anchored expression) |
+| `StepDown` | **Unused** — the cut is single-pass | n/a |
+| `Direction` | Travel direction; determines the lead-in side | This addon |
+| `Side` / `UseComp` | Kerf compensation side | This addon |
+
+One invariant is genuinely load-bearing, because the post derives torch state from it:
+
+```
+ClearanceHeight  >  StartDepth  >  FinalDepth
+```
+
+FreeCAD's stock-anchored default expressions already satisfy this, and they adapt when the user changes the
+stock. That is why the addon leaves them alone.
+
+### Ownership of pierce and cut heights
+
+The addon does **not** set pierce or cut heights, and must not.
+
+Those values are machine, torch and material facts. They will ultimately be held on the **ToolController**,
+which a later version of FreeCAD is expected to provide. Until then, it is the **post-processor's
+responsibility** to collect them from wherever they are held and present them in the G-code for the machine
+controller.
+
+The addon is deliberately version-agnostic about this. It creates operations and lets the post handle the
+machine-facing parameters. It should not guess, and it should not derive them from geometry.
+
+### Rules for contributors
+
+1. **Never write a part coordinate into a Z property.** Not the face Z, not the model bounding box, not a
+   hardcoded constant. The post reads these as torch heights; part geometry leaking in produces wrong
+   machine data (for example a pierce height of 51 mm on a part that sits at Z = 50).
+2. **Never set `StepDown` or describe a cut as multipass.** The cut is single-pass.
+3. **Do not "fix" the depth properties to match the model.** FreeCAD binds stock-anchored expressions to
+   them at creation time; a plain assignment to an expression-bound property is silently discarded, so an
+   apparent fix is a no-op that reads as if it worked.
+4. **The lead-in is the pierce point.** For narrow or irregular cutouts the start position is the
+   safety-critical output of this addon, which is why each cutout gets its own operation.
 
 ---
 
@@ -233,7 +323,7 @@ create_profile_operation(op_name, job, tool_controller, edge_names, model_clone,
     ├── Set ToolController
     ├── Set ViewObject.Proxy (with setDeleteObjectsOnReject(False))
     ├── Build Base: [(model_clone, [edge_name, ...])]
-    ├── Set Direction, Side/UseComp, heights
+    ├── Set Direction and Side/UseComp
     ├── Call add_leadinout_dressup()
     └── Return profile_op or None
 ```
@@ -284,33 +374,68 @@ An edge is classified as concave if **any** of its vertices lies deeper than `co
 
 #### Step 3: Chain formation
 
-Consecutive concave edges are grouped into chains:
+A wire is a closed loop, so its edge indices form a **circle**: index `n - 1` is adjacent to index `0`.
+Concave edges are therefore grouped into runs of *circularly consecutive* indices.
+
+Two things are needed, and neither is sufficient on its own:
+
+1. **Start the scan at an index that begins a run**, so no run straddles the seam.
+2. **Compare adjacency modulo the edge count**, so a run that legitimately wraps from the last index
+   back to the first stays joined.
 
 ```
-concave_indices = [0, 1, 2, 7, 8, 9, 10]
+n = len(edges)
+concave_set = set(concave_indices)
 
-current_chain = [0]
-for j in 1..len(concave_indices):
-    if concave_indices[j] == concave_indices[j-1] + 1:
-        current_chain.append(concave_indices[j])  # consecutive
+# 1. start at a run start, so the seam never cuts a run in half
+start = next(
+    (i for i in range(n)
+     if i in concave_set and (i - 1) % n not in concave_set),
+    concave_indices[0],
+)
+# 2. walk n indices from there, wrapping; keep the wrapped value
+ordered = [i % n for i in range(start, start + n) if i % n in concave_set]
+
+# 3. group on circular adjacency
+for a, b in pairwise(ordered):
+    if (b - a) % n == 1:          # circularly consecutive
+        current_chain.append(b)
     else:
-        if len(current_chain) >= 2:
-            chains.append([edges[idx] for idx in current_chain])
-        current_chain = [concave_indices[j]]  # start new chain
-if len(current_chain) >= 2:
-    chains.append([edges[idx] for idx in current_chain])
+        chains.append(current_chain)
 ```
 
-Minimum chain length is 2 edges — a single concave edge is not considered a meaningful indentation.
-
-#### Step 4: Wrap-around detection
-
-If the first and last concave indices form a continuous chain across the wire boundary (last edge → first edge), they are merged into a single chain:
+Example — a 15-edge wire with notches at indices 3-5, 7-9 and a wrap-around notch at 14-0-1:
 
 ```
-if concave_indices[0] == len(edges) - 1 and concave_indices[1] == 0:
-    chains = [wrap_chain]  # replace all chains with the wrap chain
+concave_indices = [0, 1, 3, 4, 5, 7, 8, 9, 14]
+start   = 3
+ordered = [3, 4, 5, 7, 8, 9, 14, 0, 1]
+
+→ chains: [3, 4, 5]   [7, 8, 9]   [14, 0, 1]
 ```
+
+Minimum chain length is 2 edges — a single concave edge is not a meaningful indentation, and is
+dropped. Note that `14, 0, 1` is one run of three, not three runs of one: without the circular adjacency
+test the seam would split it and all three fragments would be discarded, silently losing the notch.
+
+#### Why circular grouping is not optional
+
+An earlier implementation grouped consecutive indices linearly and then patched up a "wrap-around" case
+afterwards. It was wrong in two ways:
+
+- One branch was **unreachable**. `concave_indices` is always ascending, so with two or more entries
+  `concave_indices[0] < concave_indices[-1] <= n - 1`; a test for `concave_indices[0] == n - 1` can never
+  be true.
+- The reachable branch **merged every concave chain on the wire into one**. A part with three separate
+  notches produced a single chain spanning all of them, and because the merged chain is not closed, the
+  closure check in the caller did not catch it. The operation was created, and the resulting toolpath
+  traversed across the part instead of following the notches.
+
+Whether the bug fired depended on where `Part.__sortEdges__` happened to place the wire's seam. Measured
+across every rotation of the input vertex order, the old code merged wrongly in **4 of 11** rotations for a
+two-notch outline and **6 of 15** for a three-notch outline — roughly 40% of cases, not a rare edge case.
+
+The contiguity check below is a belt-and-braces guard against the same class of failure.
 
 #### Visual representation
 
@@ -348,9 +473,10 @@ The notch creates concave edges 2, 3, 4 whose vertices extend inward past the de
 +-----2-----+
 ```
 
-The notch creates concave edges 0, 5 whose lines extend inside the bounding box. Edges 1, 2, 3, 4 lie on the bounding box and are excluded. These form chain `[0, 5]`.
-
-The problem: the chain formation loop iterates 0→1→2→3→4→5, so it finds edge 0 first, then edge 5. Since 5 ≠ 0+1, it starts a new chain. Result: `[0]` (discarded) and `[5]` (discarded). The wrap-around check `concave_indices[0] == len(edges) - 1 and concave_indices[1] == 0` evaluates to `0 == 5 and 5 == 0` → False, so it never triggers.
+The notch creates concave edges 0 and 5, whose vertices extend inward past the depth tolerance.
+Edges 1, 2, 3 and 4 lie on the bounding box and are excluded. Because 5 and 0 are adjacent across the
+wire seam, the circular grouping in Step 3 produces the single chain `[5, 0]`. A linear scan would have
+produced two runs of one edge each and discarded both, silently losing the notch.
 
 #### Mermaid diagram — concave detection flow
 
@@ -364,28 +490,42 @@ flowchart TD
     E --> G{≥ 2 concave edges?}
     F --> G
     G -->|No| H[Return empty]
-    G -->|Yes| I[Group consecutive edges into chains]
-    I --> J{First & last indices wrap?}
-    J -->|Yes| K[Merge into single wrap chain]
-    J -->|No| L[Keep separate chains]
-    K --> M[Return chains]
+    G -->|Yes| I[Start scan at a run start]
+    I --> J[Group on circular adjacency mod n]
+    J --> K[Drop runs shorter than 2 edges]
+    K --> L[Return chains]
+    H --> M[Done]
     L --> M
-    H --> N[Done]
-    M --> N
 ```
 
-### Wire-closed validation
+### Wire-contiguity validation
 
-Concave chains are validated to ensure they don't form closed wires (which would be mishandled as open profiles):
+Each chain is mapped back to the model clone's edges, then checked for **contiguity** — whether the edges
+form one connected end-to-end run:
 
 ```
-matched_edges = [model_clone.Shape.getElement(name) for name in edge_names]
-test_wire = Part.Wire(Part.__sortEdges__(matched_edges))
+matched_edges = [clone.Shape.getElement(name) for name in edge_names]
+ordered = Part.__sortEdges__(matched_edges)
+if not is_contiguous_run(ordered):
+    skip + warn
+```
+
+`Part.__sortEdges__()` orders the edges into a wire sequence, and `is_contiguous_run()` walks that
+sequence verifying each edge shares an endpoint with the one before it. If they do not all join, the
+chain is actually several separate features concatenated together, and profiling them as one operation
+would drive the tool **across the part** rather than along an indentation.
+
+This is a different failure from a closed wire, and needs a different test. A merged chain is not closed,
+so a closure check passes it:
+
+```
+test_wire = Part.Wire(ordered)
 if test_wire.isClosed():
-    skip  # closed wire — handled as regular loop instead
+    skip  # closed wire — a complete loop, already handled by closed-loop detection
 ```
 
-`Part.__sortEdges__()` orders the edges into a valid wire sequence. If the resulting wire is closed, the chain is skipped because it represents a complete loop (already handled by the closed-loop detection above).
+Both checks are applied. Contiguity is the safety-critical one: a false negative here means a cut the
+user never asked for.
 
 ### Complexity
 
@@ -396,8 +536,8 @@ if test_wire.isClosed():
 | Wire iteration | O(W × E_w) | W = wires per face, E_w = edges per wire |
 | Edge matching | O(E_w) | O(1) hashCode lookup per edge |
 | Concave detection | O(E_outer) | E_outer = outer wire edges |
-| Chain formation | O(C) | C = concave edges |
-| Wire validation | O(E_chain) | Sorting + wire construction |
+| Chain formation | O(C) | C = concave edges; circular scan, still one pass |
+| Contiguity check | O(E_chain²) | Walk-based; E_chain is small (a few edges) |
 | **Total per face** | **O(E_total)** | Linear in total edge count |
 
 The algorithm is efficient because hashCode lookups are O(1) and each edge is processed a constant number of times.
@@ -413,15 +553,23 @@ The algorithm is efficient because hashCode lookups are O(1) and each edge is pr
 | Edge matching tolerance | 0.001 mm | Length and Z-level comparison |
 | Top face normal threshold | 0.99 | Allow slight face tilt |
 
-### Default cutting parameters (mm)
+### Cutting parameters (Z)
 
-| Parameter | Value | Purpose |
-|-----------|-------|---------|
-| ClearanceHeight | 5.0 | Rapid travel Z above workpiece |
-| SafeHeight | 3.0 | Linear travel Z |
-| StartDepth | 0.0 | Cutting start Z |
-| StepDown | 1.0 | Depth per pass |
-| FinalDepth | -2.0 | Final cut depth (negative = below surface) |
+The addon sets **no** Z properties. See [Jet Cutting Premise](#jet-cutting-premise) — the post-processor
+owns pierce and cut heights, and the Z axis is driven by the machine controller.
+
+FreeCAD binds stock-anchored expressions to these at operation-creation time, and they are left intact:
+
+| Parameter | Source | Meaning for jet cutting |
+|-----------|--------|-------------------------|
+| ClearanceHeight | `OpStockZMax + SetupSheet.ClearanceHeightOffset` | Retract height |
+| SafeHeight | `OpStockZMax + SetupSheet.SafeHeightOffset` | Feed-travel height |
+| StartDepth | `OpStartDepth` | Pierce height (post reads it) |
+| FinalDepth | `OpFinalDepth` | Cut height (post reads it) |
+| StepDown | `OpToolDiameter` | Unused — single-pass cut |
+
+A plain assignment to any of these is **silently discarded** by FreeCAD, because the expression binding
+takes precedence. Setting them does nothing, and reads as though it worked.
 
 ### Dialog defaults
 
