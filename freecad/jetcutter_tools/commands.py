@@ -136,7 +136,7 @@ class SameEdgesAsHighlighted:
 
     def GetResources(self):
         return {
-            "Pixmap": "same-edges-as-highlighted",
+            "Pixmap": "JetCutter_SameEdges",
             "MenuText": "Same Edges As Highlighted",
             "ToolTip": "Select all edges matching the length and Z-level of highlighted edges",
         }
@@ -186,7 +186,7 @@ class FindProfiles:
 
     def GetResources(self):
         return {
-            "Pixmap": "FindProfiles",
+            "Pixmap": "JetCutter_FindProfiles",
             "MenuText": "Find Profiles",
             "ToolTip": "Create Profile operations for internal edges on CAM Job top faces",
         }

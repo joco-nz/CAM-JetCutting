@@ -29,7 +29,7 @@ The addon adds a "JetCutter Tools" toolbar to the CAM Workbench with two command
 
 ### Same Edges As Highlighted
 
-![same-edges-as-highlighted.svg](Resources/Icons/same-edges-as-highlighted.svg)
+![JetCutter_SameEdges.svg](Resources/Icons/JetCutter_SameEdges.svg)
 
 Finds and selects all edges in the active document that match a template profile defined by highlighted edges. Matching is based on edge length and global Z-level.
 
@@ -46,7 +46,7 @@ Finds and selects all edges in the active document that match a template profile
 
 ### Find Profiles
 
-![FindProfiles.svg](Resources/Icons/FindProfiles.svg)
+![JetCutter_FindProfiles.svg](Resources/Icons/JetCutter_FindProfiles.svg)
 
 Creates CAM Profile operations for internal edges (holes and cutouts) on the top faces of a selected CAM Job. Optionally detects and creates operations for concave indentations in the outer wire.
 
