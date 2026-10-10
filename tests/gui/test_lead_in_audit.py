@@ -19,6 +19,7 @@ Teardown is mandatory and the ordering matters -- see `close_everything`.
 
     freecad tests/gui/test_lead_in_audit.py
 """
+import contextlib
 import math
 import os
 import sys
@@ -253,15 +254,17 @@ def body(report):
                  "and it is not marked")
 
     # --- a small hole with a window: shortened to the floor --------------
-    # Measured on the probe: at x3 the pierce lands outside a 6 mm hole, while
-    # x2 fits inside it. So this one must be corrected, not merely reported.
-    _small_job, small_op, small_dressup, small_wire = build_case(doc, "small", 6.0)
-    report.check(small_op is not None, "built a 6 mm hole case")
+    # 7 mm, not 6. The pierce has to clear the waste edge by kerf/2 as well as
+    # being inside it, which tightens the budget from D - kerf/2 to D - kerf and
+    # so moves the smallest fixable hole from 6 mm to 7 mm at a 2 mm kerf.
+    # Measured: D > 3 x kerf predicts every boundary in the sweep.
+    _small_job, small_op, small_dressup, small_wire = build_case(doc, "small", 7.0)
+    report.check(small_op is not None, "built a 7 mm hole case")
     if small_op is None:
         return
     was_outside = radius_of(small_dressup) > 3.0
     report.check(was_outside,
-                 "at x%.1f the 6 mm hole's pierce starts on the part (r=%.4f)"
+                 "at x%.1f the 7 mm hole's pierce starts on the part (r=%.4f)"
                  % (DEFAULT_MULTIPLIER, radius_of(small_dressup)))
 
     findings = C.audit_leadin_pierces([(small_op, small_dressup, small_wire)],
@@ -285,8 +288,8 @@ def body(report):
     # nothing about the guard. Here the operator has said yes and the only
     # reason left not to search is that the contour is convex -- where the
     # inward normal cannot leave the waste from any position.
-    _cg_job, guard_op, guard_dressup, guard_wire = build_case(doc, "convex", 6.0)
-    report.check(guard_op is not None, "built a second 6 mm hole for the guard")
+    _cg_job, guard_op, guard_dressup, guard_wire = build_case(doc, "convex", 7.0)
+    report.check(guard_op is not None, "built a second 7 mm hole for the guard")
     if guard_op is not None:
         C.audit_leadin_pierces([(guard_op, guard_dressup, guard_wire)],
                                side="Inside", configured=DEFAULT_MULTIPLIER,
@@ -297,6 +300,34 @@ def body(report):
     report.check_eq(small_dressup.RadiusIn.Value, A.MINIMUM_MULTIPLIER * KERF,
                     "RadiusIn is now %.2f mm (x%.1f x %.1f mm kerf)"
                     % (A.MINIMUM_MULTIPLIER * KERF, A.MINIMUM_MULTIPLIER, KERF))
+
+    # --- a hole the edge-clearance rule newly rejects ---------------------
+    # This one shortened to x2 cleanly before the margin existed. At x2 its
+    # pierce centre sits 0.997 mm from the hole edge and the pierce hole's own
+    # radius is 1 mm, so it exactly reaches the finished edge. Requiring
+    # kerf/2 of clearance misses it by 0.003 mm and it now flags.
+    _mg_job, margin_op, margin_dressup, margin_wire = build_case(doc, "margin", 6.0)
+    report.check(margin_op is not None, "built a 6 mm hole for the margin rule")
+    if margin_op is not None:
+        margin_region = C.waste_region_from_wire(margin_wire)
+        findings = C.audit_leadin_pierces(
+            [(margin_op, margin_dressup, margin_wire)], side="Inside",
+            configured=DEFAULT_MULTIPLIER)
+        report.check_eq(findings[0].status, A.ON_PART,
+                        "a 6 mm hole now flags: x2 would put the pierce hole "
+                        "against the finished edge")
+        report.check(margin_dressup.Label.startswith(A.ONPART_PREFIX),
+                     "and is marked rather than given an unsafe lead-in")
+        with contextlib.suppress(Exception):
+            margin_dressup.recompute()
+        clearance = A.pierce_clearance(pierce_of(margin_dressup), margin_region)
+        # At the configured length, which is where the audit left it: it tried
+        # x2, found the clearance still short, and restored. At x2 this hole's
+        # pierce sits 0.997 mm in against a 1.0 mm requirement.
+        report.emit("    with its length restored, the pierce clearance is "
+                    "%.4f mm against a %.4f mm requirement"
+                    % (clearance if clearance is not None else float("nan"),
+                       KERF / 2.0))
 
     # --- a hole with no window at all: flagged, and still left cutting -----
     # 5 mm hole, 2 mm kerf: the waste offers 4 mm and the arc needs 4 mm. There

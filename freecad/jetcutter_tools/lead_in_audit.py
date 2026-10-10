@@ -289,34 +289,76 @@ def waste_polygon(points):
     return polygon
 
 
-def is_in_waste(point, polygon):
-    """Report whether `point` is inside the waste region. False when untestable.
+def pierce_clearance(point, polygon):
+    """Signed distance from `point` to the waste boundary: positive inside, in mm.
 
-    Deliberately not tri-state at this level: an unusable region returns False,
-    and the caller distinguishes the two cases by checking the region first. The
-    alternative -- returning None -- pushes a None check onto every call site,
-    which is where it gets forgotten.
+    **Measured to `polygon.boundary`, never to the polygon.** Shapely's
+    `Point.distance(Polygon)` is 0 for any point inside it -- the point is
+    contained, so the nearest point of the polygon is the point itself. Asking
+    the boundary instead gives the real inset: a point 1 mm inside a 10 mm square
+    reports 1, not 0. An earlier version of this module used the polygon and so
+    would have reported every pierce as touching the edge.
+
+    `polygon.boundary` rather than `polygon.exterior` so that a region with
+    interior rings -- an island of part inside the waste -- is measured to the
+    nearest of all its edges, which is the one that matters.
+    """
+    if point is None or polygon is None:
+        return None
+    try:
+        from shapely.geometry import Point
+        probe = Point(point[0], point[1])
+        distance = probe.distance(polygon.boundary)
+        return distance if polygon.contains(probe) else -distance
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def is_in_waste(point, polygon, margin=0.0):
+    """Report whether `point` is inside the waste, by at least `margin` mm.
+
+    The margin is not decoration. A pierce is a hole of roughly the jet's width,
+    so a pierce *centre* that is merely inside the waste can still put that hole
+    against the finished edge: on a 6 mm hole at a 2 mm kerf, x2 puts the centre
+    0.997 mm in and the pierce hole's own radius is 1 mm, so it exactly reaches
+    the edge. Passing `kerf/2` requires the whole pierce hole to sit inside the
+    waste rather than touching its rim.
+
+    False when untestable. Deliberately not tri-state at this level: an unusable
+    region returns False, and the caller distinguishes the two cases by checking
+    the region first. The alternative -- returning None -- pushes a None check
+    onto every call site, which is where it gets forgotten.
     """
     if point is None or polygon is None:
         return False
-    try:
-        from shapely.geometry import Point
-        return bool(polygon.contains(Point(point[0], point[1])))
-    except Exception:  # noqa: BLE001
-        return False
+    if margin <= 0.0:
+        try:
+            from shapely.geometry import Point
+            return bool(polygon.contains(Point(point[0], point[1])))
+        except Exception:  # noqa: BLE001
+            return False
+    clearance = pierce_clearance(point, polygon)
+    return clearance is not None and clearance >= margin
 
 
 # -- deciding what to do ----------------------------------------------------
 
 def waste_budget(hole_diameter, kerf):
-    """Return the largest lead-in keeping the pierce in the waste: `D - k/2`.
+    """Return the largest lead-in that keeps the whole pierce hole in the waste.
 
-    A closed-form restatement of the measured `L < 2R - t`. It is a convenience
-    for reporting and for the `Side=Outside` case, **not** the test: the audit
-    measures the real toolpath, because this formula assumes a convex contour of
-    a given diameter and says nothing about a slot or a concave chain.
+    `D - kerf`, not the `D - kerf/2` that merely puts the pierce *centre* inside.
+    The extra `kerf/2` is the pierce hole's own radius: requiring the centre to
+    clear the rim by that much is what stops the pierce reaching the finished
+    edge. Measured on the GUI tier, requiring it turns a 6 mm hole at a 2.2 mm
+    kerf from "shorten to x2" into "no window", so it is a real tightening rather
+    than a formality.
+
+    A closed-form restatement of that rule for a circular hole, used for
+    reporting and for the `Side=Outside` case -- **not** for the test. The audit
+    measures the real toolpath, because this assumes a convex contour of a given
+    diameter and says nothing about a slot or a concave chain.
     """
-    return hole_diameter - kerf / 2.0
+    return hole_diameter - kerf
 
 
 def next_action(in_waste, side="Inside", inverted=False, multiplier=None,

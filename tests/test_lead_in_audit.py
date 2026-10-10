@@ -239,9 +239,58 @@ def test_shortening_happens_at_most_once():
     assert after == audit.ACTION_FLAG
 
 
-def test_the_budget_is_hole_diameter_less_half_the_kerf():
-    assert audit.waste_budget(20.0, 2.0) == pytest.approx(19.0)
-    assert audit.waste_budget(5.0, 2.0) == pytest.approx(4.0)
+def test_the_budget_leaves_room_for_the_whole_pierce_hole():
+    # D - kerf, not D - kerf/2. The extra kerf/2 is the pierce hole's own
+    # radius: a centre that merely sits inside the waste can still put the hole
+    # against the finished edge. On a 6 mm hole at a 2 mm kerf, x2 leaves the
+    # centre 0.997 mm in -- and the pierce hole's radius is 1 mm, so it exactly
+    # reaches the edge.
+    assert audit.waste_budget(20.0, 2.0) == pytest.approx(18.0)
+    assert audit.waste_budget(5.0, 2.0) == pytest.approx(3.0)
+
+
+# -- clearance from the waste edge ------------------------------------------
+
+def test_clearance_is_measured_to_the_boundary_not_the_polygon():
+    # Shapely returns 0 for a point's distance to a polygon containing it, so
+    # the naive measurement reports every pierce as touching the edge. An
+    # earlier version of this module had exactly that and would have made the
+    # margin below meaningless.
+    region = audit.waste_polygon(square(20.0))
+    assert audit.pierce_clearance((10.0, 10.0), region) == pytest.approx(10.0)
+    assert audit.pierce_clearance((1.0, 10.0), region) == pytest.approx(1.0)
+    assert audit.pierce_clearance((25.0, 10.0), region) == pytest.approx(-5.0)
+
+
+def test_clearance_of_an_unusable_region_is_nothing():
+    assert audit.pierce_clearance((1.0, 1.0), None) is None
+
+
+def test_a_pierce_inside_but_against_the_edge_is_not_clear():
+    region = audit.waste_polygon(square(20.0))
+    # 0.5 mm in, on a 2 mm kerf: the pierce hole's own radius is 1 mm, so it
+    # reaches 0.5 mm past the finished edge. Containment alone passes this.
+    assert audit.is_in_waste((0.5, 10.0), region) is True
+    assert audit.is_in_waste((0.5, 10.0), region, margin=1.0) is False
+    assert audit.is_in_waste((0.5, 10.0), region, margin=0.4) is True
+
+
+def test_exactly_at_the_margin_is_clear():
+    # The rule is "at least kerf/2", so a pierce hole that exactly touches the
+    # finished edge and does not cross it passes. This is a deliberate boundary,
+    # not a fudge: the 6 mm hole that motivates the margin misses it by 0.003 mm.
+    region = audit.waste_polygon(square(20.0))
+    assert audit.is_in_waste((1.0, 10.0), region, margin=1.0) is True
+
+
+def test_the_margin_defaults_to_bare_containment():
+    region = audit.waste_polygon(square(20.0))
+    assert audit.is_in_waste((0.2, 10.0), region) is True
+    assert audit.is_in_waste((0.2, 10.0), region, margin=1.0) is False
+
+
+def test_no_region_is_never_clear():
+    assert audit.is_in_waste((1.0, 1.0), None, margin=1.0) is False
 
 
 def test_the_default_is_above_the_floor():

@@ -611,8 +611,13 @@ def tool_kerf(operation):
             return None
 
 
-def measure_pierce(dressup, region):
-    """Return `(pierce, in_waste)` for a dressup, or `(None, None)` if unreadable.
+def measure_pierce(dressup, region, kerf=None):
+    """Return `(pierce, clear)` for a dressup, or `(None, None)` if unreadable.
+
+    `clear` means the pierce is inside the waste **and** at least `kerf/2` from
+    its edge, so the pierce hole itself cannot reach the finished edge. `kerf` of
+    None falls back to bare containment, which is only right when the jet width
+    is genuinely unknown.
 
     Recomputes the dressup first: its path is what is read, and a path left
     stale by an earlier edit would report the pre-edit geometry as if it were
@@ -625,7 +630,8 @@ def measure_pierce(dressup, region):
     pierce = LeadInAudit.pierce_point(dressup.Path)
     if pierce is None:
         return None, None
-    return pierce, LeadInAudit.is_in_waste(pierce, region)
+    margin = None if kerf is None else kerf / 2.0
+    return pierce, LeadInAudit.is_in_waste(pierce, region, margin=margin or 0.0)
 
 
 def apply_start_point(operation, dressup, xy):
@@ -667,7 +673,8 @@ def apply_start_point(operation, dressup, xy):
     return True
 
 
-def search_for_clear_pierce(operation, dressup, points, region, cancel_check=None):
+def search_for_clear_pierce(operation, dressup, points, region, kerf=None,
+                            cancel_check=None):
     """Try candidate start points until the pierce lands in the waste.
 
     Returns the point that worked, or None. Every candidate is verified against
@@ -687,8 +694,8 @@ def search_for_clear_pierce(operation, dressup, points, region, cancel_check=Non
             return None
         if not apply_start_point(operation, dressup, candidate):
             continue
-        _pierce, in_waste = measure_pierce(dressup, region)
-        if in_waste:
+        _pierce, clear = measure_pierce(dressup, region, kerf)
+        if clear:
             return candidate
     return None
 
@@ -771,21 +778,21 @@ def _audit_one(  # noqa: PLR0911
 
     # -- lever 1: direction ------------------------------------------------
     # Free, and it does not move the cut's start, so it goes first.
-    pierce, in_waste = measure_pierce(dressup, region)
+    pierce, clear = measure_pierce(dressup, region, kerf)
     if pierce is None:
         return LeadInAudit.Finding(
             name, LeadInAudit.UNREADABLE,
             "its toolpath has no cutting move to read a pierce from")
-    if LeadInAudit.next_action(in_waste, side=side) == LeadInAudit.ACTION_INVERT:
+    if LeadInAudit.next_action(clear, side=side) == LeadInAudit.ACTION_INVERT:
         dressup.InvertIn = not getattr(dressup, "InvertIn", False)
         inverted = True
         multiplier = configured
-        pierce, in_waste = measure_pierce(dressup, region)
+        pierce, clear = measure_pierce(dressup, region, kerf)
         if pierce is None:
             return LeadInAudit.Finding(
                 name, LeadInAudit.UNREADABLE,
                 "its toolpath has no cutting move after the direction flip")
-    if in_waste:
+    if clear:
         return settle(LeadInAudit.ACTION_INVERT if inverted else None,
                       "lead-in direction flipped inward" if inverted else "")
 
@@ -798,7 +805,7 @@ def _audit_one(  # noqa: PLR0911
             == LeadInAudit.ACTION_SEARCH):
         searched = True
         moved = search_for_clear_pierce(operation, dressup, points, region,
-                                        cancel_check)
+                                        kerf, cancel_check)
         if moved is not None:
             return settle(LeadInAudit.ACTION_SEARCH,
                           LeadInAudit.describe_relocated(moved))
@@ -807,8 +814,8 @@ def _audit_one(  # noqa: PLR0911
         # rather than at the last place the search happened to try.
         with contextlib.suppress(Exception):
             apply_start_point(operation, dressup, pierce)
-        pierce, in_waste = measure_pierce(dressup, region)
-        if in_waste:
+        pierce, clear = measure_pierce(dressup, region, kerf)
+        if clear:
             return settle(LeadInAudit.ACTION_SEARCH,
                           LeadInAudit.describe_relocated(pierce))
         multiplier = configured
@@ -821,8 +828,8 @@ def _audit_one(  # noqa: PLR0911
             == LeadInAudit.ACTION_SHORTEN:
         set_leadin_multiplier(dressup, LeadInAudit.MINIMUM_MULTIPLIER)
         multiplier = LeadInAudit.MINIMUM_MULTIPLIER
-        pierce, in_waste = measure_pierce(dressup, region)
-        if in_waste:
+        pierce, clear = measure_pierce(dressup, region, kerf)
+        if clear:
             return settle(LeadInAudit.ACTION_SHORTEN,
                           LeadInAudit.describe_shorten(
                               configured, LeadInAudit.MINIMUM_MULTIPLIER))
