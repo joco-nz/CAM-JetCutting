@@ -337,3 +337,173 @@ def test_the_attention_list_is_capped():
     lines = audit.describe_findings(findings, limit=5)
     assert len(lines) == 6
     assert "and 25 more" in lines[-1]
+
+
+# -- relocation: is the waste region even a candidate? --------------------
+
+def test_a_convex_region_is_recognised():
+    polygon = audit.waste_polygon(square(20.0))
+    assert audit.is_convex(polygon) is True
+
+
+def test_a_non_convex_region_is_recognised():
+    # An L. Its inward normal cannot escape from every point, which is the whole
+    # reason relocation is worth trying there.
+    ell = [(0.0, 0.0), (20.0, 0.0), (20.0, 8.0), (8.0, 8.0), (8.0, 20.0), (0.0, 20.0)]
+    polygon = audit.waste_polygon(ell)
+    assert audit.is_convex(polygon) is False
+
+
+def test_no_region_is_not_convex_and_not_not_convex():
+    # None means "not determined", and next_action treats it as "do not search".
+    assert audit.is_convex(None) is None
+
+
+# -- the candidate walk ----------------------------------------------------
+
+def contour(length, segments=40):
+    """Build an ordered polyline along +x then +y: an L in section."""
+    half = length / 2.0
+    points = [(half * i / segments, 0.0) for i in range(segments + 1)]
+    points += [(half, half * i / segments) for i in range(1, segments + 1)]
+    return points
+
+
+def _arc_positions(points, candidates):
+    """Where each candidate sits along the polyline, in mm from its start.
+
+    By nearest vertex, so accurate to half a segment -- the assert below allows
+    for exactly that. Projecting onto the containing segment instead would be
+    more precise than the thing being measured.
+    """
+    lengths = [0.0]
+    for index in range(1, len(points)):
+        lengths.append(lengths[-1] + math.hypot(points[index][0] - points[index - 1][0],
+                                              points[index][1] - points[index - 1][1]))
+    out = []
+    for candidate in candidates:
+        best = min(range(len(points)),
+                   key=lambda i: math.hypot(candidate[0] - points[i][0],
+                                            candidate[1] - points[i][1]))
+        out.append(lengths[best])
+    return out, lengths[-1]
+
+
+def test_candidates_alternate_about_the_origin():
+    # First-fit in either direction is the point: taking one direction only
+    # would walk the whole contour before trying the other side, so the accepted
+    # candidate would be the farthest one that worked rather than the nearest.
+    # On a 40 mm contour stepping 2 mm, the positions must be 2, 38, 4, 36, 6,
+    # 34 -- out one way, back the other, growing.
+    points = contour(40.0)
+    got = list(audit.start_point_candidates(points, points[0], step=2.0, limit=6))
+    positions, total = _arc_positions(points, got)
+    assert total == pytest.approx(40.0)
+    half_segment = 0.25   # 40 mm contour, 40 segments per leg
+    assert positions == pytest.approx([2.0, 38.0, 4.0, 36.0, 6.0, 34.0],
+                                      abs=half_segment)
+
+
+def test_candidates_are_bounded():
+    points = contour(40.0)
+    got = list(audit.start_point_candidates(points, points[0], step=2.0,
+                                           limit=5))
+    assert len(got) == 5
+
+
+def test_the_default_budget_is_the_one_the_dialog_offers():
+    assert audit.MAX_CANDIDATES == 48
+    assert audit.CANDIDATE_STEP_MM == 2.0
+
+
+def test_the_walk_wraps_so_it_can_pass_the_contours_end():
+    # Otherwise it stops at the far end and never tries the other side of the
+    # origin, which is where the nearest alternative usually is.
+    points = contour(20.0)
+    got = list(audit.start_point_candidates(points, points[0], step=3.0,
+                                           limit=12))
+    assert len(got) == 12
+    # The contour is 40 long; stepping 3 each way six times is 18, and the
+    # wrapped walk should still be producing points on it.
+    for candidate in got:
+        assert candidate[0] >= -1e-6 and candidate[0] <= 20.0 + 1e-6
+        assert candidate[1] >= -1e-6 and candidate[1] <= 10.0 + 1e-6
+
+
+def test_a_contour_with_no_usable_points_yields_no_candidates():
+    assert list(audit.start_point_candidates([], (0.0, 0.0))) == []
+    assert list(audit.start_point_candidates([(1.0, 1.0)], (0.0, 0.0))) == []
+    assert list(audit.start_point_candidates([(0.0, 0.0)] * 4, (0.0, 0.0))) == []
+
+
+def test_no_candidates_are_offered_without_a_step_or_a_budget():
+    points = contour(20.0)
+    assert list(audit.start_point_candidates(points, points[0], step=0.0)) == []
+    assert list(audit.start_point_candidates(points, points[0], limit=0)) == []
+
+
+def test_a_candidate_is_always_on_the_contour():
+    # Asserted against the segments, not the vertices: the walk interpolates
+    # within a segment, so the nearest vertex can be half a segment away and a
+    # vertex-based tolerance would be measuring the discretisation instead.
+    points = contour(40.0)
+    segment = min(math.hypot(points[i + 1][0] - points[i][0],
+                             points[i + 1][1] - points[i][1])
+                  for i in range(len(points) - 1))
+    for candidate in audit.start_point_candidates(points, points[0], step=1.7,
+                                                  limit=20):
+        nearest = min(math.hypot(candidate[0] - points[i][0],
+                                 candidate[1] - points[i][1])
+                      for i in range(len(points) - 1))
+        assert nearest <= segment + 1e-9, candidate
+
+
+# -- the order the levers are spent in --------------------------------------
+
+def test_a_convex_region_is_never_relocated():
+    # The guard that makes relocation affordable: on a convex contour the
+    # inward normal cannot escape the waste from any start point, so relocating
+    # provably cannot help -- and convex holes are the common failing case.
+    assert audit.next_action(False, side="Inside", multiplier=3.0,
+                             region_convex=True, allow_start_move=True,
+                             search_tried=False) == audit.ACTION_SHORTEN
+
+
+def test_a_non_convex_region_is_relocated_before_shortening():
+    assert audit.next_action(False, side="Inside", multiplier=3.0,
+                             region_convex=False, allow_start_move=True,
+                             search_tried=False) == audit.ACTION_SEARCH
+
+
+def test_relocation_is_not_offered_without_the_operator_asking():
+    assert audit.next_action(False, side="Inside", multiplier=3.0,
+                             region_convex=False, allow_start_move=False,
+                             search_tried=False) == audit.ACTION_SHORTEN
+
+
+def test_relocation_is_not_retried_once_spent():
+    assert audit.next_action(False, side="Inside", multiplier=3.0,
+                             region_convex=False, allow_start_move=True,
+                             search_tried=True) == audit.ACTION_SHORTEN
+
+
+def test_an_undetermined_region_is_not_relocated():
+    # "Not told yes" is not "told no", but it is also not permission to move
+    # where the cut begins.
+    assert audit.next_action(False, side="Inside", multiplier=3.0,
+                             region_convex=None, allow_start_move=True,
+                             search_tried=False) == audit.ACTION_SHORTEN
+
+
+def test_the_direction_flip_still_precedes_relocation():
+    # It is free and does not move the cut's start, so it goes first even on a
+    # non-convex contour with relocation allowed.
+    assert audit.next_action(False, side="Outside", inverted=False,
+                             multiplier=3.0, region_convex=False,
+                             allow_start_move=True,
+                             search_tried=False) == audit.ACTION_INVERT
+
+
+def test_relocation_is_reported_as_moving_the_cut_start():
+    text = audit.describe_relocated((12.5, 30.25))
+    assert "12.500" in text and "30.250" in text

@@ -322,6 +322,29 @@ def show_profile_settings_dialog(job):
     length_row.addStretch()
     leadin_layout.addLayout(length_row)
 
+    # Start-point relocation, opt-in and off by default.
+    #
+    # When a lead-in pierces the finished part, the audit can either shorten the
+    # lead-in or move where the cut begins. Shortening spends arc-stabilisation
+    # margin -- the length *is* the distance the arc travels before it cuts -- so
+    # moving is the better outcome where it is available. But it relocates the
+    # cut's start, which is an operational choice: a tab position, a seam, an
+    # ordering preference may all depend on where a cut begins. So it is a
+    # setting the operator sets, not a behaviour the addon assumes.
+    startmove_check = QtGui.QCheckBox()
+    startmove_check.setChecked(False)
+    startmove_check.setToolTip(
+        "When a lead-in would pierce the finished part, allow the check to move "
+        "the cut's start point around the contour to find somewhere the pierce "
+        "lands in waste. Off by default: this changes where the cut begins."
+    )
+    startmove_row = QtGui.QHBoxLayout()
+    startmove_row.addWidget(QtGui.QLabel("Start point:"))
+    startmove_row.addWidget(startmove_check)
+    startmove_row.addWidget(QtGui.QLabel("allow the pierce check to move it"))
+    startmove_row.addStretch()
+    leadin_layout.addLayout(startmove_row)
+
     leadin_group.setLayout(leadin_layout)
     layout.addWidget(leadin_group)
 
@@ -380,6 +403,8 @@ def show_profile_settings_dialog(job):
         "styleIn": "Perpendicular",
         "styleOut": "Perpendicular",
         "lengthMultiplier": 3.0,
+        # Off by default: moving where a cut begins is the operator's call.
+        "allowStartMove": False,
         "concaveDetection": True,
         "concaveDepthTol": 5.0,
     }
@@ -394,6 +419,7 @@ def show_profile_settings_dialog(job):
         selected["styleIn"] = leadin_style_combo.currentText()
         selected["styleOut"] = leadout_style_combo.currentText()
         selected["lengthMultiplier"] = length_spin.value()
+        selected["allowStartMove"] = startmove_check.isChecked()
         selected["concaveDetection"] = concave_check.isChecked()
         selected["concaveDepthTol"] = depth_spin.value()
         dialog.accept()
@@ -528,15 +554,12 @@ def set_leadin_multiplier(dressup, multiplier):
         dressup.RadiusOut = multiplier
 
 
-def waste_region_from_wire(wire, deflection=0.02):
-    """Return the region a closed contour encloses, as a polygon, or None.
+def contour_points(wire, deflection=0.02):
+    """Return a closed contour's ordered `(x, y)` points, or None.
 
     Discretised rather than read from the ordered vertexes because a wire's
     vertexes say nothing about the curves between them, and a straight chord
     between two points of a hole cuts across the waste the pierce has to land in.
-
-    None means "no region to test against", which the audit records as unchecked
-    rather than as clean.
     """
     if wire is None:
         return None
@@ -545,7 +568,6 @@ def waste_region_from_wire(wire, deflection=0.02):
             return None
     except Exception:  # noqa: BLE001
         return None
-    points = None
     try:
         points = [(p.x, p.y) for p in wire.discretize(Deflection=deflection)]
     except Exception:  # noqa: BLE001
@@ -555,7 +577,16 @@ def waste_region_from_wire(wire, deflection=0.02):
             points = [(v.Point.x, v.Point.y) for v in wire.OrderedVertexes]
         except Exception:  # noqa: BLE001
             return None
-    return LeadInAudit.waste_polygon(points)
+    return points
+
+
+def waste_region_from_wire(wire, deflection=0.02):
+    """Return the region a closed contour encloses, as a polygon, or None.
+
+    None means "no region to test against", which the audit records as unchecked
+    rather than as clean.
+    """
+    return LeadInAudit.waste_polygon(contour_points(wire, deflection))
 
 
 def tool_kerf(operation):
@@ -580,8 +611,90 @@ def tool_kerf(operation):
             return None
 
 
+def measure_pierce(dressup, region):
+    """Return `(pierce, in_waste)` for a dressup, or `(None, None)` if unreadable.
+
+    Recomputes the dressup first: its path is what is read, and a path left
+    stale by an earlier edit would report the pre-edit geometry as if it were
+    the result.
+    """
+    try:
+        dressup.recompute()
+    except Exception:  # noqa: BLE001
+        return None, None
+    pierce = LeadInAudit.pierce_point(dressup.Path)
+    if pierce is None:
+        return None, None
+    return pierce, LeadInAudit.is_in_waste(pierce, region)
+
+
+def apply_start_point(operation, dressup, xy):
+    """Point an operation's cut at `xy` and bring its dressup up to date.
+
+    **`UseStartPoint` is set as well as the point, and that is required.** With
+    it false, `StartPoint` is not read at all: the Nesting workbench measured
+    that setting the point to opposite corners of a part produced bit-identical
+    toolpaths. Verified on this addon's own operations in
+    `tests/gui/test_lead_in_probe.py`, which records the pierce's (x, y) as the
+    point goes round a hole and finds four distinct places.
+
+    The Z is taken from `ClearanceHeight`, never carried over: a `StartPoint`'s Z
+    is a derived value written by `CommandSetStartPoint`, not an authored
+    coordinate, and riding a transformed Z along reaches the toolpath as a
+    spurious level.
+
+    Returns True when the operation and its dressups recomputed. A failure means
+    the path is in an unknown state, so the caller treats it as "this candidate
+    does not work" rather than as a result.
+    """
+    import FreeCAD as App
+
+    try:
+        if hasattr(operation, "UseStartPoint"):
+            operation.UseStartPoint = True
+        z = 0.0
+        clearance = getattr(operation, "ClearanceHeight", None)
+        if clearance is not None:
+            try:
+                z = float(clearance.Value)
+            except Exception:  # noqa: BLE001
+                z = 0.0
+        operation.StartPoint = App.Vector(xy[0], xy[1], z)
+        operation.recompute()
+    except Exception:  # noqa: BLE001
+        return False
+    dressup.recompute()
+    return True
+
+
+def search_for_clear_pierce(operation, dressup, points, region, cancel_check=None):
+    """Try candidate start points until the pierce lands in the waste.
+
+    Returns the point that worked, or None. Every candidate is verified against
+    the dressup's own regenerated toolpath rather than predicted from the
+    geometry: the whole point of this audit is to measure, and a prediction that
+    disagreed with the toolpath would put the pierce somewhere nobody checked.
+
+    Leaves the start point wherever the last attempt put it, so the caller
+    restores it if nothing worked -- a relocation that achieved nothing is a
+    silent change to where the cut begins.
+    """
+    origin = LeadInAudit.pierce_point(dressup.Path)
+    if origin is None:
+        return None
+    for candidate in LeadInAudit.start_point_candidates(points, origin):
+        if cancel_check is not None and cancel_check():
+            return None
+        if not apply_start_point(operation, dressup, candidate):
+            continue
+        _pierce, in_waste = measure_pierce(dressup, region)
+        if in_waste:
+            return candidate
+    return None
+
+
 def audit_leadin_pierces(targets, side, configured=LeadInAudit.DEFAULT_MULTIPLIER,
-                         cancel_check=None, progress=None):
+                         allow_start_move=False, cancel_check=None, progress=None):
     """Move every target's lead-in pierce into the waste, or say why not.
 
     `targets` is a list of `(operation, dressup, wire)`. Each is measured from
@@ -591,133 +704,151 @@ def audit_leadin_pierces(targets, side, configured=LeadInAudit.DEFAULT_MULTIPLIE
 
     `configured` is the multiplier the operations were created with, so a
     shortening can be reported as a change from what the operator asked for.
+    `allow_start_move` permits relocating a cut's start, which preserves the
+    operator's full lead-in but changes where the cut begins -- so it is off
+    unless they asked for it.
 
-    Returns a list of `lead_in_audit.Finding`, one per target.
+    The order of the three levers is the design; see `lead_in_audit.next_action`
+    for why relocation is tried before shortening. Returns a list of
+    `lead_in_audit.Finding`, one per target.
     """
     findings = []
     for index, (operation, dressup, wire) in enumerate(targets):
         if cancel_check is not None and cancel_check():
             break
-        if dressup is None:
-            findings.append(LeadInAudit.Finding(
-                getattr(operation, "Name", "?"), LeadInAudit.UNREADABLE,
-                "no lead-in dressup was created"))
-            continue
-        # No lead-in means no pierce to place. Reporting these would raise a
-        # finding for an operation that cannot have one.
-        if not getattr(dressup, "LeadIn", False):
-            findings.append(LeadInAudit.Finding(
-                dressup.Name, LeadInAudit.CLEAN,
-                "lead-in is disabled", multiplier=None))
-            continue
-
-        name = dressup.Name
-        polygon = waste_region_from_wire(wire)
-        if polygon is None:
-            findings.append(LeadInAudit.Finding(
-                name, LeadInAudit.UNREADABLE,
-                "its contour could not be turned into a region to test against"))
-            continue
-
-        kerf = tool_kerf(operation)
-        # The multiplier FindProfiles was asked for, kept so the report can say
-        # what a lead-in was shortened *from*.
-        configured_multiplier = configured
-        # Seeded with the configured value, not None. `next_action` only offers
-        # a shortening when it has a multiplier above the floor to compare, so
-        # seeding None made every pierce read as unfixable on the first pass --
-        # which is what a None multiplier means there: "I do not know the length,
-        # so I cannot shorten it".
-        multiplier = configured
-        inverted = False
-        action = LeadInAudit.ACTION_FLAG
-        pierce = None
-        spent = 0
-
-        # Bounded rather than `while True`: every action either settles the
-        # pierce or moves the tracked multiplier to the floor, so this cannot
-        # cycle. The bound is a backstop against a recompute that silently fails
-        # to change the path, which would otherwise re-apply the same action.
-        while spent < 4:
-            spent += 1
-            try:
-                dressup.recompute()
-            except Exception:  # noqa: BLE001
-                findings.append(LeadInAudit.Finding(
-                    name, LeadInAudit.UNREADABLE,
-                    "its dressup would not recompute"))
-                break
-            pierce = LeadInAudit.pierce_point(dressup.Path)
-            if pierce is None:
-                findings.append(LeadInAudit.Finding(
-                    name, LeadInAudit.UNREADABLE,
-                    "its toolpath has no cutting move to read a pierce from"))
-                break
-
-            if action == LeadInAudit.ACTION_SHORTEN:
-                multiplier = LeadInAudit.MINIMUM_MULTIPLIER
-            in_waste = LeadInAudit.is_in_waste(pierce, polygon)
-            if in_waste:
-                LeadInAudit.clear_on_part(dressup)
-                # Say so when a lead-in was moved. Silently shortening one is
-                # worse than not fixing it: the operator sees a different
-                # toolpath from the one they configured and is not told.
-                detail = ""
-                if action == LeadInAudit.ACTION_SHORTEN:
-                    detail = LeadInAudit.describe_shorten(
-                        configured_multiplier, LeadInAudit.MINIMUM_MULTIPLIER)
-                elif action == LeadInAudit.ACTION_INVERT:
-                    detail = "lead-in direction flipped inward"
-                findings.append(LeadInAudit.Finding(
-                    name, LeadInAudit.CLEAN, detail, multiplier=multiplier,
-                    action=action))
-                break
-
-            nxt = LeadInAudit.next_action(
-                in_waste, side=side, inverted=inverted, multiplier=multiplier)
-            if nxt == LeadInAudit.ACTION_INVERT:
-                action = nxt
-                inverted = True
-                dressup.InvertIn = True
-                continue
-            if nxt == LeadInAudit.ACTION_SHORTEN:
-                action = nxt
-                set_leadin_multiplier(dressup, LeadInAudit.MINIMUM_MULTIPLIER)
-                continue
-
-            # ACTION_FLAG: no lead-in both stabilises the arc and stays in
-            # the waste for this contour.
-            # Put the operator's own length back if a trial shortening was
-            # applied. Leaving it shortened would hand them a shorter, less
-            # stable lead-in that demonstrably did not fix the problem -- a
-            # silent downgrade on top of a flag. Restored rather than left,
-            # because "change nothing and say why" is the promise.
-            if action == LeadInAudit.ACTION_SHORTEN:
-                set_leadin_multiplier(dressup, configured_multiplier)
-                multiplier = configured_multiplier
-                # A recompute that raises leaves the toolpath in an unknown
-                # state, but the flag has already been decided and the operator
-                # still needs to be told, so this is not worth aborting for.
-                with contextlib.suppress(Exception):
-                    dressup.recompute()
-            detail = LeadInAudit.describe_flag(
-                multiplier, None if kerf is None else
-                LeadInAudit.waste_budget(_contour_diameter(wire), kerf), kerf or 0.0)
-            LeadInAudit.mark_on_part(dressup, detail)
-            findings.append(LeadInAudit.Finding(
-                name, LeadInAudit.ON_PART, detail, pierce, multiplier,
-                LeadInAudit.ACTION_FLAG))
-            break
-        else:
-            findings.append(LeadInAudit.Finding(
-                name, LeadInAudit.UNREADABLE,
-                "its pierce did not settle after four attempts", pierce,
-                multiplier))
-
+        finding = _audit_one(operation, dressup, wire, side, configured,
+                             allow_start_move, cancel_check)
+        if finding is not None:
+            findings.append(finding)
         if progress is not None:
             progress(index + 1)
-
     return findings
+
+
+def _audit_one(  # noqa: PLR0911
+        operation, dressup, wire, side, configured, allow_start_move,
+        cancel_check):
+    """Return the `Finding` for one operation, having tried to fix it.
+
+    Many returns because the levers are a straight-line sequence and each has its
+    own way of ending: in waste, unreadable, or flagged. Splitting it into one
+    function per lever would hide the ordering, which is the part that is easy to
+    get wrong and hard to see.
+    """
+    if dressup is None:
+        return LeadInAudit.Finding(
+            getattr(operation, "Name", "?"), LeadInAudit.UNREADABLE,
+            "no lead-in dressup was created")
+    # No lead-in means no pierce to place. Reporting these would raise a finding
+    # for an operation that cannot have one.
+    if not getattr(dressup, "LeadIn", False):
+        return LeadInAudit.Finding(dressup.Name, LeadInAudit.CLEAN,
+                                   "lead-in is disabled", multiplier=None)
+
+    name = dressup.Name
+    points = contour_points(wire)
+    region = LeadInAudit.waste_polygon(points)
+    if region is None:
+        return LeadInAudit.Finding(
+            name, LeadInAudit.UNREADABLE,
+            "its contour could not be turned into a region to test against")
+
+    kerf = tool_kerf(operation)
+    convex = LeadInAudit.is_convex(region)
+    # Seeded with the configured value, not None. `next_action` only offers a
+    # shortening when it has a multiplier above the floor to compare, so seeding
+    # None made every pierce read as unfixable on the first pass -- which is what
+    # a None multiplier means there: "I do not know the length, so I cannot
+    # shorten it".
+    multiplier = configured
+    inverted = False
+    searched = False
+
+    def settle(action, detail):
+        LeadInAudit.clear_on_part(dressup)
+        return LeadInAudit.Finding(name, LeadInAudit.CLEAN, detail,
+                                   multiplier=multiplier, action=action)
+
+    # -- lever 1: direction ------------------------------------------------
+    # Free, and it does not move the cut's start, so it goes first.
+    pierce, in_waste = measure_pierce(dressup, region)
+    if pierce is None:
+        return LeadInAudit.Finding(
+            name, LeadInAudit.UNREADABLE,
+            "its toolpath has no cutting move to read a pierce from")
+    if LeadInAudit.next_action(in_waste, side=side) == LeadInAudit.ACTION_INVERT:
+        dressup.InvertIn = not getattr(dressup, "InvertIn", False)
+        inverted = True
+        multiplier = configured
+        pierce, in_waste = measure_pierce(dressup, region)
+        if pierce is None:
+            return LeadInAudit.Finding(
+                name, LeadInAudit.UNREADABLE,
+                "its toolpath has no cutting move after the direction flip")
+    if in_waste:
+        return settle(LeadInAudit.ACTION_INVERT if inverted else None,
+                      "lead-in direction flipped inward" if inverted else "")
+
+    # -- lever 2: relocate the start, keeping the full length --------------
+    if (allow_start_move and convex is False
+            and LeadInAudit.next_action(False, side=side, inverted=inverted,
+                                        multiplier=multiplier,
+                                        region_convex=convex,
+                                        allow_start_move=True)
+            == LeadInAudit.ACTION_SEARCH):
+        searched = True
+        moved = search_for_clear_pierce(operation, dressup, points, region,
+                                        cancel_check)
+        if moved is not None:
+            return settle(LeadInAudit.ACTION_SEARCH,
+                          LeadInAudit.describe_relocated(moved))
+        # Nothing worked at the operator's length. Put their start back before
+        # falling through, so the shortening below is tried where they set it
+        # rather than at the last place the search happened to try.
+        with contextlib.suppress(Exception):
+            apply_start_point(operation, dressup, pierce)
+        pierce, in_waste = measure_pierce(dressup, region)
+        if in_waste:
+            return settle(LeadInAudit.ACTION_SEARCH,
+                          LeadInAudit.describe_relocated(pierce))
+        multiplier = configured
+
+    # -- lever 3: shorten to the arc-stabilisation floor -------------------
+    if LeadInAudit.next_action(False, side=side, inverted=inverted,
+                               multiplier=multiplier, region_convex=convex,
+                               allow_start_move=allow_start_move,
+                               search_tried=searched) \
+            == LeadInAudit.ACTION_SHORTEN:
+        set_leadin_multiplier(dressup, LeadInAudit.MINIMUM_MULTIPLIER)
+        multiplier = LeadInAudit.MINIMUM_MULTIPLIER
+        pierce, in_waste = measure_pierce(dressup, region)
+        if in_waste:
+            return settle(LeadInAudit.ACTION_SHORTEN,
+                          LeadInAudit.describe_shorten(
+                              configured, LeadInAudit.MINIMUM_MULTIPLIER))
+
+    # -- flag --------------------------------------------------------------
+    # Nothing both stabilises the arc and stays in the waste here. Undo the
+    # trial changes: a shortening that demonstrably did not help is a silent
+    # downgrade on top of a flag, and "change nothing and say why" is the
+    # promise.
+    if multiplier != configured:
+        set_leadin_multiplier(dressup, configured)
+        multiplier = configured
+        with contextlib.suppress(Exception):
+            dressup.recompute()
+    if searched and not allow_start_move:
+        searched = False
+    detail = LeadInAudit.describe_flag(
+        multiplier,
+        None if kerf is None else
+        LeadInAudit.waste_budget(_contour_diameter(wire), kerf),
+        kerf or 0.0)
+    if searched:
+        detail = LeadInAudit.describe_search_exhausted() + "; " + detail
+    LeadInAudit.mark_on_part(dressup, detail)
+    return LeadInAudit.Finding(name, LeadInAudit.ON_PART, detail, pierce,
+                               multiplier, LeadInAudit.ACTION_FLAG)
 
 
 def _contour_diameter(wire):
@@ -1342,6 +1473,7 @@ def create_profile_ops_for_top_loops():
                     leadin_targets,
                     side=offset_side,
                     configured=lengthMultiplier,
+                    allow_start_move=bool(settings.get("allowStartMove")),
                     cancel_check=lambda: cancelled_list[0],
                 )
                 doc.recompute()

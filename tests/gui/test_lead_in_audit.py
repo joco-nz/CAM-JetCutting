@@ -84,8 +84,55 @@ def close_everything():
         print("  note: GUI close raised %s" % exc)
 
 
-def build_case(doc, tag, hole_dia):
-    """Create a Profile operation on a hole of `hole_dia`, with its dressup.
+def dumbbell(cx, cy, end_radius=6.0, neck_half=3.25, span=12.0):
+    """Build a two-lobed face: fat ends joined by a narrower neck.
+
+    **Non-convex on purpose.** A round hole and a rectangular slot are both
+    convex, and on a convex contour the inward normal cannot leave the waste from
+    any start point -- so the audit skips relocation there and the search would
+    never be exercised.
+
+    `neck_half` was measured, not guessed. With the start point on the neck's
+    lower edge, a 2 mm kerf, and the operator's x3 (a 6 mm lead-in):
+
+        neck_half   x3 in waste   x2 in waste
+          2.00           no           no     -- too tight for either
+          2.50           no           no
+          3.00           no          YES     <- usable
+          3.50           no          YES     <- usable
+          4.00          YES          YES     -- x3 fits, nothing to fix
+          4.50          YES          YES
+
+    Two earlier revisions got this wrong in opposite directions: half-width 2.5
+    was so tight that x2 could not fix it either, and 4.5 was so roomy that the
+    operation needed no fixing at all -- so the audit correctly did nothing and
+    the relocation path was never taken. The test compares the two routes, which
+    only works where both of them can succeed.
+
+    At a lobe the path sits 5 mm from the centre, so even x3 lands inside the
+    6 mm lobe. That contrast is the case for relocating rather than shortening.
+    """
+    import FreeCAD as App
+    import Part
+
+    lobes = [Part.Face(Part.Wire(Part.makeCircle(end_radius,
+                                             App.Vector(cx - span, cy, 0)))),
+             Part.Face(Part.Wire(Part.makeCircle(end_radius,
+                                                 App.Vector(cx + span, cy, 0))))]
+    band = Part.Face(Part.makePolygon([
+        App.Vector(cx - span, cy - neck_half, 0),
+        App.Vector(cx + span, cy - neck_half, 0),
+        App.Vector(cx + span, cy + neck_half, 0),
+        App.Vector(cx - span, cy + neck_half, 0),
+        App.Vector(cx - span, cy - neck_half, 0)]))
+    return band.fuse(lobes[0]).fuse(lobes[1])
+
+
+def build_case(doc, tag, hole_dia=None, profile=None):
+    """Create a Profile operation on an internal feature, with its dressup.
+
+    `hole_dia` makes a round hole; `profile` overrides it with any face to cut
+    out of the plate.
 
     Returns `(job, operation, dressup, wire)`: the first because the settings
     dialog needs one, the rest the shape `audit_leadin_pierces` takes.
@@ -97,12 +144,16 @@ def build_case(doc, tag, hole_dia):
     import Path.Main.Job as PathJob
     from jetcutter_tools import commands as C
 
-    radius = hole_dia / 2.0
     corners = [App.Vector(0, 0, 0), App.Vector(PLATE_W, 0, 0),
                App.Vector(PLATE_W, PLATE_H, 0), App.Vector(0, PLATE_H, 0)]
     outer = Part.makePolygon([*corners, corners[0]])
-    circle = Part.Wire(Part.makeCircle(radius, App.Vector(HOLE_CX, HOLE_CY, 0)))
-    shape = Part.Face(outer).cut(Part.Face(circle))
+    if profile is not None:
+        shape = Part.Face(outer).cut(profile)
+    else:
+        radius = hole_dia / 2.0
+        shape = Part.Face(outer).cut(
+            Part.Face(Part.Wire(Part.makeCircle(radius,
+                                                App.Vector(HOLE_CX, HOLE_CY, 0)))))
 
     obj = doc.addObject("Part::Feature", "plate_%s" % tag)
     obj.Shape = shape
@@ -147,13 +198,30 @@ def build_case(doc, tag, hole_dia):
     return job, operation, C.find_dressup_on(doc, operation), wire
 
 
-def radius_of(dressup):
+def pierce_of(dressup):
+    """Return the dressup's pierce point, or None."""
     from jetcutter_tools import lead_in_audit as A
 
-    point = A.pierce_point(dressup.Path)
+    return A.pierce_point(dressup.Path)
+
+
+def radius_of(dressup):
+    """Return the pierce's radius from the hole centre.
+
+    Only meaningful for the round fixtures -- a dumbbell is not centred and not
+    circular, so its waste test uses `in_region` below.
+    """
+    point = pierce_of(dressup)
     if point is None:
         return None
     return math.hypot(point[0] - HOLE_CX, point[1] - HOLE_CY)
+
+
+def in_region(dressup, region):
+    """Whether the pierce is inside an arbitrary waste region."""
+    from jetcutter_tools import lead_in_audit as A
+
+    return A.is_in_waste(pierce_of(dressup), region)
 
 
 def body(report):
@@ -211,6 +279,21 @@ def body(report):
                  "and the report says it was shortened, not changed silently")
     report.check(not small_dressup.Label.startswith(A.ONPART_PREFIX),
                  "a corrected operation is not marked as needing a human")
+    # The guard behind the whole cost argument, on a *second* identical hole with
+    # relocation explicitly allowed. The first one cannot show it: the opt-in
+    # gate fires before the convexity test, so a disallowed search tells you
+    # nothing about the guard. Here the operator has said yes and the only
+    # reason left not to search is that the contour is convex -- where the
+    # inward normal cannot leave the waste from any position.
+    _cg_job, guard_op, guard_dressup, guard_wire = build_case(doc, "convex", 6.0)
+    report.check(guard_op is not None, "built a second 6 mm hole for the guard")
+    if guard_op is not None:
+        C.audit_leadin_pierces([(guard_op, guard_dressup, guard_wire)],
+                               side="Inside", configured=DEFAULT_MULTIPLIER,
+                               allow_start_move=True)
+        report.check(not getattr(guard_op, "UseStartPoint", False),
+                     "with relocation allowed, a convex hole is still not "
+                     "searched -- nothing was left to try that could work")
     report.check_eq(small_dressup.RadiusIn.Value, A.MINIMUM_MULTIPLIER * KERF,
                     "RadiusIn is now %.2f mm (x%.1f x %.1f mm kerf)"
                     % (A.MINIMUM_MULTIPLIER * KERF, A.MINIMUM_MULTIPLIER, KERF))
@@ -268,6 +351,77 @@ def body(report):
         report.check(radius_of(outside_dressup) < 10.0,
                      "the pierce is now inside the hole (r=%.4f)"
                      % radius_of(outside_dressup))
+
+    # --- relocation, on a contour where it can actually help --------------
+    # The case the whole placement search exists for: a dumbbell whose neck is
+    # too narrow for the operator's x3 but whose ends have room to spare. What
+    # matters is not that it gets fixed -- the length step would fix that too --
+    # but *how*: relocation keeps their x3, shortening spends it.
+    _db_job, dumb_op, dumb_dressup, dumb_wire = build_case(
+        doc, "dumb", profile=dumbbell(HOLE_CX, HOLE_CY))
+    report.check(dumb_op is not None, "built a dumbbell case")
+    if dumb_op is not None:
+        region = C.waste_region_from_wire(dumb_wire)
+        # Put the cut's start on the neck explicitly. Where the contour's first
+        # vertex happens to fall is not something a test should depend on, and
+        # with roomy lobes it can land somewhere that needs no fixing at all --
+        # in which case the audit correctly does nothing and the relocation path
+        # is never taken.
+        C.apply_start_point(dumb_op, dumb_dressup, (HOLE_CX, HOLE_CY - 3.25))
+        report.check(not in_region(dumb_dressup, region),
+                     "a start point on the neck pierces onto the part: %s"
+                     % (pierce_of(dumb_dressup),))
+        report.check(C.LeadInAudit.is_convex(region) is False,
+                     "the dumbbell is non-convex, so relocation is not skipped")
+
+        findings = C.audit_leadin_pierces(
+            [(dumb_op, dumb_dressup, dumb_wire)], side="Inside",
+            configured=DEFAULT_MULTIPLIER, allow_start_move=True)
+        report.check_eq(findings[0].status, A.CLEAN,
+                        "relocation puts the pierce in the waste")
+        report.check_eq(findings[0].action, A.ACTION_SEARCH,
+                        "and it did so by moving the start point")
+        report.check_eq(dumb_dressup.RadiusIn.Value, DEFAULT_MULTIPLIER * KERF,
+                        "with the operator's full x%.1f length kept -- the "
+                        "arc-stabilisation margin is not spent"
+                        % DEFAULT_MULTIPLIER)
+        report.check(in_region(dumb_dressup, region),
+                     "and the pierce now lands in waste: %s"
+                     % (pierce_of(dumb_dressup),))
+        report.check("moved" in findings[0].detail,
+                     "and the report says where it moved it")
+        dumb_op.recompute()
+        dumb_dressup.recompute()
+        report.check(dumb_op.UseStartPoint is True,
+                     "UseStartPoint is set -- without it the point is discarded")
+
+    # --- the same case with relocation not permitted ----------------------
+    # Opt-in means opt-in: with it off, the search must not happen at all and
+    # the operation must end up shortened rather than relocated.
+    _do_job, opt_op, opt_dressup, opt_wire = build_case(
+        doc, "dumbopt", profile=dumbbell(HOLE_CX, HOLE_CY))
+    report.check(opt_op is not None, "built a second dumbbell for the opt-out")
+    if opt_op is not None:
+        C.apply_start_point(opt_op, opt_dressup, (HOLE_CX, HOLE_CY - 3.25))
+        # Compared rather than merely asserted absent: this test set the start
+        # itself to put the operation in a tight spot, so "UseStartPoint is
+        # false" would fail for the test's own doing and prove nothing.
+        start_before = tuple(opt_op.StartPoint)
+        report.check(not in_region(opt_dressup,
+                                   C.waste_region_from_wire(opt_wire)),
+                     "the opt-out case starts on the neck too, so it also "
+                     "pierces onto the part")
+        findings = C.audit_leadin_pierces(
+            [(opt_op, opt_dressup, opt_wire)], side="Inside",
+            configured=DEFAULT_MULTIPLIER, allow_start_move=False)
+        report.check_eq(findings[0].status, A.CLEAN,
+                        "it is still fixed with relocation off")
+        report.check_eq(findings[0].action, A.ACTION_SHORTEN,
+                        "by shortening instead of moving the cut's start")
+        report.check_eq(opt_dressup.RadiusIn.Value, A.MINIMUM_MULTIPLIER * KERF,
+                        "down to the x%.1f floor" % A.MINIMUM_MULTIPLIER)
+        report.check(tuple(opt_op.StartPoint) == start_before,
+                     "and its start point is where the test put it, unmoved")
 
     # --- the dialog will not offer a lead-in that cannot stabilise an arc ---
     # The floor is asserted in the fast tier, but that only proves the constant.

@@ -85,8 +85,23 @@ PROP_ONPART = "LeadInOnPart"
 # The three things the audit can do about a pierce, and the one thing it cannot.
 ACTION_NONE = None
 ACTION_INVERT = "invert"
+ACTION_SEARCH = "search"
 ACTION_SHORTEN = "shorten"
 ACTION_FLAG = "flag"
+
+#: Spacing between candidate start points along the contour, in mm.
+#:
+#: The candidates are *hints*, not the point itself: `Path.fromShapes` snaps each
+#: to the nearest point on the wire, so candidates closer together than the
+#: wire's own feature spacing resolve to the same place. A fine step therefore
+#: buys extra recomputes, not extra placements. 2 mm matches the Nesting
+#: workbench's measured choice.
+CANDIDATE_STEP_MM = 2.0
+
+#: Ceiling on candidates tried per operation. Bounded because each one costs a
+#: recompute of the operation and its dressup, and a contour is not going to
+#: find room the first start point did not.
+MAX_CANDIDATES = 48
 
 CLEAN = "clean"
 ON_PART = "on-part"
@@ -304,30 +319,154 @@ def waste_budget(hole_diameter, kerf):
     return hole_diameter - kerf / 2.0
 
 
-def next_action(in_waste, side="Inside", inverted=False, multiplier=None):
+def next_action(in_waste, side="Inside", inverted=False, multiplier=None,
+                region_convex=None, allow_start_move=False, search_tried=False):
     """Decide what to do next about a pierce that is not in the waste.
 
-    Ordered so each lever is tried at most once:
+    Ordered so each lever is spent at most once, and in the order that keeps
+    arc-stabilisation margin where it can:
 
     1. `Side=Outside` points the lead-in away from the contour by definition, so
        it is on the part whatever the length. `InvertIn` is the lever there, and
-       it is tried before shortening because flipping costs nothing.
-    2. Shorten to the arc-stabilisation floor. Not to some smaller length: below
+       it is tried before anything else because flipping costs nothing and does
+       not move the cut's start.
+    2. **Relocation**, when the operator allowed it and the waste region is
+       known to be non-convex. Tried before shortening because the lead-in's
+       length *is* the distance the arc travels before it cuts: a relocation
+       that works keeps the operator's full length and their margin, where a
+       shortening spends it. Skipped on a convex region, where the inward normal
+       cannot leave the waste from any start point and so relocation provably
+       cannot help -- and convex holes are the common failing case, so without
+       this guard each one would pay a search for nothing.
+    3. Shorten to the arc-stabilisation floor. Not to some smaller length: below
        the floor the lead-in does not let the arc stabilise, which trades a
        pierce scar for a bad cut. The `multiplier > MINIMUM_MULTIPLIER` guard is
        what makes this fire once -- after shortening, the tracked multiplier is
-       at the floor, so a second pass falls through to flagging rather than
-       looping.
-    3. Flag. The window is empty -- no lead-in both stabilises the arc and stays
+       at the floor, so a second pass falls through to flagging.
+    4. Flag. The window is empty -- no lead-in both stabilises the arc and stays
        in the waste -- and that is the operator's call, not the addon's.
+
+    `region_convex` of None means "not determined". Relocation is skipped then,
+    because a search costs recomputes and its whole justification is the
+    non-convex case; not being able to tell is not being told yes.
     """
     if in_waste:
         return ACTION_NONE
     if side == "Outside" and not inverted:
         return ACTION_INVERT
+    if allow_start_move and not search_tried and region_convex is False:
+        return ACTION_SEARCH
     if multiplier is not None and multiplier > MINIMUM_MULTIPLIER:
         return ACTION_SHORTEN
     return ACTION_FLAG
+
+
+def is_convex(region):
+    """Whether a waste region is convex, or None when it cannot be told.
+
+    Exact rather than heuristic: a region equals its own convex hull if and only
+    if it is convex. None is a real answer the caller must handle, not a false --
+    defaulting it would send every convex hole into the search.
+    """
+    if region is None:
+        return None
+    try:
+        return bool(region.equals(region.convex_hull))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def start_point_candidates(points, origin, step=CANDIDATE_STEP_MM,
+                           limit=MAX_CANDIDATES):
+    """Yield `(x, y)` candidates spiralling out from `origin` along a contour.
+
+    **Alternating clockwise and anticlockwise outward**, because the point of the
+    search is the smallest change that works. Taking one direction only would
+    walk the whole way round a contour before trying the other side; alternating
+    means the first candidate accepted is the nearest one *in either direction*,
+    which on a contour is very nearly the nearest one overall.
+
+    `points` is the contour discretised in order. `origin` is where the cut
+    currently begins, so the walk starts where the operator's own setup began.
+
+    Hand-rolled arc-length walking rather than Shapely's `project`/`interpolate`,
+    so this stays testable without Shapely and without a FreeCAD.
+    """
+    if not points or len(points) < 2 or limit <= 0 or step <= 0:
+        return
+    lengths = [0.0]
+    for index in range(1, len(points)):
+        ax, ay = points[index - 1]
+        bx, by = points[index]
+        lengths.append(lengths[-1] + math.hypot(bx - ax, by - ay))
+    total = lengths[-1]
+    if total <= COINCIDENT_MM:
+        return
+
+    here = _project_onto(origin, points, lengths)
+    tried = 0
+    distance = step
+    while tried < limit:
+        for direction in (1.0, -1.0):
+            if tried >= limit:
+                return
+            # Wrapped, so the walk can pass the far end and come back the other
+            # side rather than stopping at the contour's start.
+            target = (here + direction * distance) % total
+            tried += 1
+            yield _at_arc_length(points, lengths, target)
+        distance += step
+
+
+def _project_onto(origin, points, lengths):
+    """Arc-length position along the polyline nearest to `origin`."""
+    px, py = origin
+    best_distance = None
+    best_at = 0.0
+    for index in range(len(points) - 1):
+        ax, ay = points[index]
+        bx, by = points[index + 1]
+        dx, dy = bx - ax, by - ay
+        span = math.hypot(dx, dy)
+        if span <= COINCIDENT_MM:
+            continue
+        t = ((px - ax) * dx + (py - ay) * dy) / (span * span)
+        t = max(0.0, min(1.0, t))
+        gap = math.hypot(px - (ax + t * dx), py - (ay + t * dy))
+        if best_distance is None or gap < best_distance:
+            best_distance = gap
+            best_at = lengths[index] + t * span
+    return best_at
+
+
+def _at_arc_length(points, lengths, target):
+    """Return the `(x, y)` at arc length `target` along the polyline."""
+    if target <= 0.0:
+        return points[0]
+    if target >= lengths[-1]:
+        return points[-1]
+    low, high = 0, len(lengths) - 1
+    while low < high - 1:
+        middle = (low + high) // 2
+        if lengths[middle] <= target:
+            low = middle
+        else:
+            high = middle
+    span = lengths[high] - lengths[low]
+    t = 0.0 if span <= COINCIDENT_MM else (target - lengths[low]) / span
+    ax, ay = points[low]
+    bx, by = points[high]
+    return (ax + t * (bx - ax), ay + t * (by - ay))
+
+
+def describe_relocated(point):
+    """Return one line saying a cut's start was moved."""
+    return f"cut start moved to ({point[0]:.3f}, {point[1]:.3f}) to keep the full lead-in"
+
+
+def describe_search_exhausted():
+    """Return one line saying no start point left room for the chosen length."""
+    return "no start point on the contour left room for the full lead-in"
 
 
 def describe_shorten(from_multiplier, to_multiplier):
