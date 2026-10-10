@@ -388,6 +388,16 @@ def body(report):
         report.check(abs(dressup.AngleIn.Value - 45.0) < 1e-6,
                      "AngleIn is 45 deg on a fresh dressup (predicted 0)")
 
+        # --- does StartPoint move the pierce AT ALL? ------------------------
+        # This is the gate for the whole placement search, and the first version
+        # of this check could not answer it: it recorded only the pierce
+        # *radius*, which on a circle is the same at every angle whether or not
+        # the start point moved. It established a true fact -- the side does not
+        # change -- by a route that cannot tell a working StartPoint from an
+        # ignored one. The Nesting workbench measured that UseStartPoint must be
+        # True or the point is silently discarded, on its own operations. This is
+        # the same question about ours, whose Base is one multi-edge entry.
+        points = []
         sides = set()
         for degrees in (0, 90, 180, 270):
             angle = math.radians(degrees)
@@ -399,7 +409,20 @@ def body(report):
             )
             op.recompute()
             dressup.recompute()
+            points.append(first_cut_start(dressup.Path))
             sides.add(is_waste(pierce_radius(dressup), 20.0))
+
+        report.emit("")
+        report.emit("  does StartPoint move the pierce? (pierce x,y as it goes round)")
+        for degrees, found in zip((0, 90, 180, 270), points, strict=True):
+            report.emit("    %4d deg -> %s" % (degrees, found))
+        readable = [p for p in points if p is not None]
+        report.check(len(readable) == 4, "every position yielded a readable pierce")
+        report.check(len(set(readable)) == 4,
+                     "and all four are distinct -- StartPoint is honoured, so "
+                     "the radius-only check below is not standing in for it "
+                     "(got %d distinct of %d)"
+                     % (len(set(readable)), len(readable)))
         report.check(len(sides) == 1,
                      "moving StartPoint around a circle never changes the side "
                      "(observed %s)" % ("both" if len(sides) == 2 else "one"))
