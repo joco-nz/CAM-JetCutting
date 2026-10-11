@@ -8,6 +8,7 @@ _TOOLBAR = "JetCutter Tools"
 _COMMANDS = [
     "JetCutter_SameEdges",
     "JetCutter_FindProfiles",
+    "JetCutter_SliceModel",
 ]
 
 

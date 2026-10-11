@@ -1,0 +1,10 @@
+# Reference files, not test inputs.
+#
+# test_slicing.py runs against floral-decorative-pattern-panel-wall-screen-preslice.FCStd
+# and has its expected volumes hard-coded, so it does not open the other two.
+# They are kept locally as the ground truth the numbers were read from:
+#   floral-...-UnevenSplit.FCStd  the hand-sliced panel (Slice.0-3 volumes)
+#   Test-floral-...-full-wall-screen.FCStd  the unsliced original
+
+# FreeCAD autosave backups.
+*.FCBak

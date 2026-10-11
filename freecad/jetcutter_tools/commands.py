@@ -8,6 +8,7 @@ import FreeCADGui as Gui
 
 from . import geometry
 from . import lead_in_audit as LeadInAudit
+from . import slicing as Slicing
 
 try:
     from PySide import QtGui, QtCore
@@ -192,6 +193,122 @@ class FindProfiles:
             "MenuText": "Find Profiles",
             "ToolTip": "Create Profile operations for internal edges on CAM Job top faces",
         }
+
+
+# ============================================================================
+# SliceModel
+# ============================================================================
+
+class SliceModel:
+    """Extrudes a sketch's slice lines through a solid and slices it apart."""
+
+    def IsEnabled(self):
+        selection = Gui.Selection.getSelection()
+        if len(selection) != 1:
+            return False
+        sketch = selection[0]
+        if not sketch.isDerivedFrom("Sketcher::SketchObject"):
+            return False
+        return bool(list(getattr(sketch, "AttachmentSupport", None) or ()))
+
+    def Activated(self):
+        slice_selected_model()
+
+    def GetResources(self):
+        return {
+            "Pixmap": "JetCutter_SliceModel",
+            "MenuText": "Slice Model",
+            "ToolTip": "Extrude a sketch's lines through the model and slice it into chunks",
+        }
+
+
+def slice_selected_model():
+    """Slice the selected sketch's model apart, as one undoable step.
+
+    The whole point is that this is one transaction. Done by hand it is two
+    commands, each with its own undo, and an abort partway through leaves the
+    model consumed by an extrusion the user then has to find and delete.
+    """
+    selection = Gui.Selection.getSelection()
+    if len(selection) != 1 or not selection[0].isDerivedFrom("Sketcher::SketchObject"):
+        App.Console.PrintError("Please select the sketch holding the slice lines.\n")
+        return
+
+    sketch = selection[0]
+    doc = sketch.Document
+
+    try:
+        model = Slicing.model_for_sketch(sketch)
+    except Slicing.SlicingError as exc:
+        App.Console.PrintError(f"{exc}\n")
+        return
+
+    if not _has_solids(model):
+        App.Console.PrintError(f"{model.Label} has no solid to slice.\n")
+        return
+
+    # Pre-created so the `finally` can close it even if opening the transaction
+    # or building it raised. See create_progress_dialog for why autoReset is off.
+    progress_dialog = None
+    opened = False
+
+    def note(message):
+        if progress_dialog is not None:
+            progress_dialog.setLabelText(message)
+            QApplication.processEvents()
+
+    try:
+        doc.openTransaction("Slice Model")
+        opened = True
+
+        progress_dialog = QProgressDialog(
+            "Preparing...",
+            "Cancel",
+            0,
+            3,
+            Gui.getMainWindow(),
+        )
+        progress_dialog.setWindowModality(QtCore.Qt.WindowModal)
+        progress_dialog.setMinimumDuration(0)
+        progress_dialog.setAutoReset(False)
+        progress_dialog.show()
+        QApplication.processEvents()
+
+        extrusion, _feature, _group, chunks = Slicing.slice_model(
+            doc, sketch, model, progress=note,
+        )
+        progress_dialog.setValue(3)
+
+        # Hidden, not deleted: the extrusion was scaffolding and the model is the
+        # original, but both are recoverable and both are in the undo. Slice Apart
+        # does the same, and the tree matches what the manual process leaves.
+        for consumed in (model, extrusion):
+            view = getattr(consumed, "ViewObject", None)
+            if view is not None:
+                view.hide()
+
+        doc.commitTransaction()
+        opened = False
+
+        App.Console.PrintMessage(
+            f"Sliced {model.Label} into {len(chunks)} chunk(s).\n"
+        )
+    except Slicing.SlicingError as exc:
+        if opened:
+            doc.abortTransaction()
+        App.Console.PrintError(f"{exc}\n")
+    except Exception as exc:  # noqa: BLE001
+        if opened:
+            doc.abortTransaction()
+        App.Console.PrintError(f"Slicing failed: {type(exc).__name__}: {exc}\n")
+    finally:
+        if progress_dialog is not None:
+            progress_dialog.close()
+
+
+def _has_solids(obj):
+    shape = getattr(obj, "Shape", None)
+    return bool(shape) and bool(shape.Solids)
 
 
 # ============================================================================

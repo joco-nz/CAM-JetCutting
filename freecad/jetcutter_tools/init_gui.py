@@ -12,5 +12,6 @@ FreeCADGui.addIconPath(os.path.join(_ADDON_ROOT, "Resources", "Icons"))
 
 FreeCADGui.addCommand("JetCutter_SameEdges", commands.SameEdgesAsHighlighted())
 FreeCADGui.addCommand("JetCutter_FindProfiles", commands.FindProfiles())
+FreeCADGui.addCommand("JetCutter_SliceModel", commands.SliceModel())
 
 FreeCADGui.addWorkbenchManipulator(Manipulator())

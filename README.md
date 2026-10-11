@@ -2,7 +2,7 @@
 
 ![jetcutter_tools.svg](Resources/Icons/jetcutter_tools.svg)
 
-FreeCAD addon that adds two tools to the CAM Workbench toolbar for jet cutting workflow assistance.
+FreeCAD addon that adds three tools to the CAM Workbench toolbar for jet cutting workflow assistance.
 
 ![CAMToolBar.png](Resources/ScreenShots/CAMToolBar.png)
 
@@ -25,7 +25,7 @@ Install via the FreeCAD Addon Manager, or place this package in your FreeCAD `Mo
 
 ## Commands
 
-The addon adds a "JetCutter Tools" toolbar to the CAM Workbench with two commands:
+The addon adds a "JetCutter Tools" toolbar to the CAM Workbench with three commands:
 
 ### Same Edges As Highlighted
 
@@ -43,6 +43,28 @@ Finds and selects all edges in the active document that match a template profile
 6. Matching edges are selected, grouped by object
 
 **Use case:** Quickly select matching edges across multiple parts for simultaneous operations, such as finding all edges at the same Z-level for profiling or cutting.
+
+### Slice Model
+
+![JetCutter_SliceModel.svg](Resources/Icons/JetCutter_SliceModel.svg)
+
+Extrudes a sketch's slice lines through a model and slices it into chunks that fit your machine. For models too large for a single cut.
+
+**How it works:**
+
+1. Draw a sketch on the model's top face containing the lines you want to cut along
+2. Select the sketch
+3. Click the "Slice Model" button
+4. The command extrudes the sketch's lines through the model and slices it apart
+5. The chunks appear in an "Exploded Slice" group, left where they were
+
+**Depth is derived, not typed.** The extrusion reaches past the model's far *and* near faces by measuring the model's bounding box along the sketch's normal, so it cuts through whatever the material thickness is — a 2 mm sheet and a 60 mm plate both work without changing a number. Your manual process hard-codes a depth; this one works that out.
+
+**Why walk up to the PartDesign body?** The sketch is attached to the model's base feature. Slicing that directly would leave the PartDesign body standing there as a second, undissolved copy of the panel. Slicing the body instead matches what Part > Split > Slice Apart does and leaves one clean parent.
+
+**Requirement:** the sketch must be attached to the model (Map Mode set, Attachment Support pointing at the model). A free-floating sketch is rejected with a message rather than guessed at.
+
+**Use case:** A decorative screen panel is 1198 x 2397 mm and your plasma bed is 1200 x 680. Draw three lines across it to make four sub-600 mm pieces, then Slice Model.
 
 ### Find Profiles
 
