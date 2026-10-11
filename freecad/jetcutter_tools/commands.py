@@ -46,10 +46,13 @@ class SameEdgesAsHighlighted:
         selection = Gui.Selection.getSelectionEx()
         if not selection:
             return False
-        first_sel = selection[0]
-        if not first_sel.SubElementNames:
-            return False
-        return any(sub.startswith("Edge") for sub in first_sel.SubElementNames)
+        # No explicit "are there subelement names" test: a whole object has an
+        # empty tuple, and `any()` over an empty tuple is already False, which
+        # is the answer we want. Verified rather than assumed -- see
+        # test_slice_model.py.
+        return any(
+            sub.startswith("Edge") for sub in selection[0].SubElementNames
+        )
 
     def Activated(self):
         TOLERANCE = 1e-3

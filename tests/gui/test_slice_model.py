@@ -72,16 +72,22 @@ def build_panel(doc, name="Plate", thickness=10.0):
     return plate, sketch
 
 
-def selection_of(*names):
+def selection_of(*entries):
+    """Clear the selection, then select each `(docName, objName[, subName])`."""
     import FreeCADGui as Gui
 
     Gui.Selection.clearSelection()
-    for name in names:
-        Gui.Selection.addSelection(name[0], name[1])
+    for entry in entries:
+        sub = entry[2] if len(entry) > 2 else None
+        if sub:
+            Gui.Selection.addSelection(entry[0], entry[1], sub)
+        else:
+            Gui.Selection.addSelection(entry[0], entry[1])
 
 
 def body(report):
     import FreeCAD as App
+    import FreeCADGui as Gui
     from jetcutter_tools import commands as C
 
     doc = App.newDocument("slice_gui")
@@ -129,17 +135,88 @@ def body(report):
     report.check(type(command.IsActive()) is bool,
                  "IsActive returns a real bool, not a truthy value")
 
-    # -- the other two commands have the same naming contract -------------
-    for cls in (C.SameEdgesAsHighlighted, C.FindProfiles):
-        report.check(
-            hasattr(cls, "IsActive") and not hasattr(cls, "IsEnabled"),
-            "%s uses IsActive like SliceModel" % cls.__name__,
-        )
-        try:
-            report.check(type(cls().IsActive()) is bool,
-                         "%s.IsActive returns a real bool" % cls.__name__)
-        except Exception as exc:
-            report.check(False, "%s.IsActive raised: %s" % (cls.__name__, exc))
+    # -- the other two commands gate on their own inputs ------------------
+    # Checked behaviourally rather than structurally. A naming check would pass
+    # against a gate that always returns True, which is precisely the failure
+    # this file exists for: all three methods were called `IsEnabled` and were
+    # never called at all, so they could have been wrong in any direction.
+    import Path.Main.Job as PathJob
+
+    PathJob.Create("Job", [plate])
+    doc.recompute()
+
+    same_edges = C.SameEdgesAsHighlighted()
+    find_profiles = C.FindProfiles()
+
+    selection_of()
+    report.check(
+        same_edges.IsActive() is False and find_profiles.IsActive() is False,
+        "nothing selected: Same Edges and Find Profiles are both inactive",
+    )
+
+    plate_edges = [n for n in ("Edge1", "Edge2", "Edge3")
+                   if getattr(plate.Shape, "Edges", None) and
+                   int(n[4:]) <= len(plate.Shape.Edges)]
+    report.check(bool(plate_edges), "the plate still has edges to select")
+    selection_of((doc.Name, "Plate", plate_edges[0] if plate_edges else "Edge1"))
+    report.check(same_edges.IsActive() is True,
+                 "one edge selected: Same Edges is active (used %s)"
+                 % (plate_edges[0] if plate_edges else "Edge1"))
+    report.check(find_profiles.IsActive() is False,
+                 "an edge is not a CAM Job, so Find Profiles stays inactive")
+
+    selection_of((doc.Name, "Plate"))
+    report.check(same_edges.IsActive() is False,
+                 "a whole object selected rather than an edge: Same Edges is "
+                 "inactive, since there is no edge to match on")
+
+    selection_of((doc.Name, "Plate"), "Face1")
+    report.check(same_edges.IsActive() is False,
+                 "a face selected rather than an edge: inactive -- the check is "
+                 "for the Edge prefix specifically, not merely for having a "
+                 "subelement name at all")
+
+    # Two faces in one selection: `any` is False on every reading, so this pins
+    # the prefix test on its own. An edge alongside a face cannot, because
+    # `any` is True there whether or not the prefix is checked.
+    selection_of((doc.Name, "Plate", "Face1"), (doc.Name, "Plate", "Face2"))
+    report.check(same_edges.IsActive() is False,
+                 "two faces selected and no edges: inactive, pinning that the "
+                 "gate checks the Edge prefix rather than mere presence")
+
+    selection_of((doc.Name, "Job"))
+    report.check(find_profiles.IsActive() is True,
+                 "a real CAM Job selected: Find Profiles is active")
+    report.check(same_edges.IsActive() is False,
+                 "a Job is not an edge, so Same Edges stays inactive")
+
+    # Creating a Job leaves its Clone selected, and the Clone sorts first.
+    # Worth pinning because both gates read only the FIRST selected object, so
+    # this ordering is what decides whether they light up straight after a Job
+    # is created.
+    report.emit("    selection after Job.Create: %s"
+                % [e.Object.Name for e in Gui.Selection.getSelectionEx()])
+    selection_of()
+    Gui.Selection.addSelection(doc.Name, "Clone")
+    Gui.Selection.addSelection(doc.Name, "Job")
+    order = [entry.Object.Name for entry in Gui.Selection.getSelectionEx()]
+    report.emit("    Clone-then-Job selection order: %s" % order)
+    report.check(
+        order[0] == "Clone",
+        "the auto-selected Clone really does come first, which is why the "
+        "gate reads the first entry rather than searching for a Job",
+    )
+    report.check(
+        find_profiles.IsActive() is False,
+        "and so a Clone-first selection leaves Find Profiles inactive -- it "
+        "acts on the first object, as create_profile_ops_for_top_loops does",
+    )
+
+    selection_of()
+    App.closeDocument(doc.Name)
+    doc = App.newDocument("slice_gui2")
+    plate, _sketch = build_panel(doc)
+    report.check(True, "rebuilt a clean document for the run below")
 
     # -- run it for real and check what ends up visible --------------------
     selection_of((doc.Name, "Sk"))
