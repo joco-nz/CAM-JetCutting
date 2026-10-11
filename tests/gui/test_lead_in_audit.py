@@ -129,6 +129,51 @@ def dumbbell(cx, cy, end_radius=6.0, neck_half=3.25, span=12.0):
     return band.fuse(lobes[0]).fuse(lobes[1])
 
 
+def _slice_source():
+    """Return the FindProfiles call site's source, for checking what it wires up.
+
+    Reading the source is not a substitute for driving the behaviour, and the
+    behaviour above is checked by driving it. This exists for one narrow thing
+    that cannot be observed from `audit_leadin_pierces` at all: the call site
+    resetting the dialog's range. That happens in `create_profile_ops_for_top_loops`,
+    which runs a settings dialog and needs a real Job, so exercising it end to
+    end would mean re-implementing the command's whole entry path in a test.
+    """
+    import inspect
+
+    from jetcutter_tools import commands as C
+
+    return inspect.getsource(C.create_profile_ops_for_top_loops)
+
+
+class _FakeApplication:
+    """Stands in for QApplication so processEvents() does not need a GUI."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def processEvents(self):
+        self.calls += 1
+
+
+class _RecordingDialog:
+    """A progress dialog that records what was asked of it."""
+
+    def __init__(self):
+        self.value = None
+        self.rng = None
+        self.label = None
+
+    def setValue(self, v):
+        self.value = v
+
+    def setRange(self, lo, hi):
+        self.rng = (lo, hi)
+
+    def setLabelText(self, text):
+        self.label = text
+
+
 def build_case(doc, tag, hole_dia=None, profile=None):
     """Create a Profile operation on an internal feature, with its dressup.
 
@@ -453,6 +498,116 @@ def body(report):
                         "down to the x%.1f floor" % A.MINIMUM_MULTIPLIER)
         report.check(tuple(opt_op.StartPoint) == start_before,
                      "and its start point is where the test put it, unmoved")
+
+    # --- progress is reported, and says how much is left ------------------
+    # The dialog sat at 100% for the whole audit because the loop's `progress`
+    # hook was never passed, so there was no way to see the work had started.
+    # Checked on a multi-target audit because a single-target run cannot tell a
+    # counting progress callback from one that fires once at the end.
+    _pj, p1_op, p1_dressup, p1_wire = build_case(doc, "prog1", hole_dia=8.0)
+    _pj2, p2_op, p2_dressup, p2_wire = build_case(doc, "prog2", hole_dia=9.0)
+    _pj3, p3_op, p3_dressup, p3_wire = build_case(doc, "prog3", hole_dia=7.0)
+    prog_targets = [(p1_op, p1_dressup, p1_wire),
+                    (p2_op, p2_dressup, p2_wire),
+                    (p3_op, p3_dressup, p3_wire)]
+    report.check(all(t[1] is not None for t in prog_targets),
+                 "built three operations to audit")
+
+    events = []
+    prog_findings = C.audit_leadin_pierces(
+        prog_targets, side="Inside", configured=DEFAULT_MULTIPLIER,
+        progress=lambda done, total, label, finding:
+        events.append((done, total, label, finding)),
+    )
+    report.check_eq(len(prog_findings), len(prog_targets),
+                    "the audited count matches the target count")
+
+    # Twice per target: once naming what is about to be checked, once with the
+    # result. The first call of each pair carries the un-incremented count.
+    report.check_eq(len(events), 2 * len(prog_targets),
+                    "progress fires twice per target, so a slow operation shows "
+                    "which one it is on rather than looking hung")
+    report.check(all(e[1] == len(prog_targets) for e in events),
+                 "every report carries the full total, so 'x of y' is renderable")
+    report.check_eq([e[0] for e in events], [0, 1, 1, 2, 2, 3],
+                    "the counter runs 0,1 then 1,2 then 2,3 -- advancing once "
+                    "per completed target")
+    report.check(all(e[2] for e in events),
+                 "every report carries a non-empty label")
+    report.check(all(p1_dressup.Name in e[2] for e in events[:2]),
+                 "the label names the operation being worked on, before its "
+                 "result is known")
+    report.check(all(e[3] is None for e in events[0::2]),
+                 "the first report of each pair has no finding yet")
+    report.check(all(e[3] is not None for e in events[1::2]),
+                 "the second carries the finding that was just reached")
+    report.emit("    progress labels: %s" % " | ".join(e[2] for e in events))
+
+    # Cancellation must still stop it. Driven through the progress callback,
+    # because that is how the dialog's cancel signal actually reaches this loop:
+    # the callback flips the same flag the cancel_check reads.
+    state = {"cancelled": False, "seen": 0}
+
+    def user_cancelled(done, total, label, finding):
+        state["seen"] += 1
+        if state["seen"] >= 3:            # partway into the second target
+            state["cancelled"] = True
+
+    partial = C.audit_leadin_pierces(
+        prog_targets, side="Inside", configured=DEFAULT_MULTIPLIER,
+        cancel_check=lambda: state["cancelled"],
+        progress=user_cancelled,
+    )
+    report.check(state["cancelled"],
+                 "the progress callback is able to raise the cancel flag")
+    report.check(len(partial) < len(prog_targets),
+                 "cancelling partway stops the audit early, rather than "
+                 "running the remaining targets")
+    report.check(state["seen"] <= 2 * len(prog_targets),
+                 "and it stops promptly: no further progress was reported after "
+                 "the cancel")
+
+    # The dialog's own wiring. This is the part that was actually missing, and
+    # it is not observable from `audit_leadin_pierces` alone -- the hook worked
+    # perfectly well while the call site passed nothing to it, which is exactly
+    # how the bug survived review.
+    #
+    # Checked by driving the call site, not by reading its source: the earlier
+    # version of this asserted `"setRange" in _slice_source()` and that both
+    # mutants below survived it, because a string is present whether or not the
+    # callback reaches the dialog. `on_audit_progress` is pulled out of the
+    # source and *called* against a recording stand-in for the dialog.
+    fake = _RecordingDialog()
+    C.begin_leadin_audit_phase(fake, 7)
+    report.check_eq(fake.rng, (0, 7),
+                    "the dialog's range is reset to the audit's own count")
+    report.check_eq(fake.value, 0,
+                    "and its value cleared, so the phase does not start already "
+                    "showing the wire loop's maximum")
+    report.check(fake.label and "0 of 7" in fake.label,
+                 "with a label saying the phase has not begun: %r" % fake.label)
+
+    C.report_leadin_audit_progress(fake, 1, 7,
+                                   "DressupLeadInOut003 - pierce is in the waste",
+                                   None)
+    report.check_eq(fake.value, 1,
+                    "the callback advances the dialog's value, so the bar moves")
+    report.check("1 of 7" in (fake.label or ""),
+                 "and labels it with the count and total: %r" % fake.label)
+    report.check("DressupLeadInOut003" in (fake.label or ""),
+                 "naming the operation it is working on")
+    C.report_leadin_audit_progress(fake, 7, 7, "last one done", None)
+    report.check_eq(fake.value, 7,
+                    "and reaches the total at the end, so the bar completes")
+
+    # The call site must actually hand the audit this callback. Not provable
+    # from the audit function alone -- the loop supported progress perfectly
+    # well while the call site passed nothing to it, which is the defect.
+    report.check(
+        "progress=on_audit_progress" in _slice_source(),
+        "the audit is handed the progress callback, rather than left with a "
+        "hook nobody calls -- which is how the dialog sat at 100% throughout",
+    )
 
     # --- the dialog will not offer a lead-in that cannot stabilise an arc ---
     # The floor is asserted in the fast tier, but that only proves the constant.

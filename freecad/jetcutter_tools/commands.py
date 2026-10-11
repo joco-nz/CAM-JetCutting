@@ -848,21 +848,76 @@ def audit_leadin_pierces(targets, side, configured=LeadInAudit.DEFAULT_MULTIPLIE
     operator's full lead-in but changes where the cut begins -- so it is off
     unless they asked for it.
 
+    `progress` is called as `progress(done, total, label, finding)`, twice per
+    target: once naming the operation about to be worked on, and once with its
+    result. Naming the operation *before* it is examined matters because the work
+    per target is wildly uneven -- an operation already in the waste costs one
+    recompute, while one needing relocation can walk dozens of candidate start
+    points, each with its own recompute. A bar driven only by the completed count
+    stalls on those and looks hung even while it is working.
+
     The order of the three levers is the design; see `lead_in_audit.next_action`
     for why relocation is tried before shortening. Returns a list of
     `lead_in_audit.Finding`, one per target.
     """
     findings = []
+    total = len(targets)
     for index, (operation, dressup, wire) in enumerate(targets):
         if cancel_check is not None and cancel_check():
             break
+        name = getattr(dressup, "Name", None) or getattr(operation, "Name", "?")
+        _report_progress(progress, index, total, f"Checking {name}...", None)
         finding = _audit_one(operation, dressup, wire, side, configured,
                              allow_start_move, cancel_check)
         if finding is not None:
             findings.append(finding)
-        if progress is not None:
-            progress(index + 1)
+        _report_progress(progress, index + 1, total,
+                         _audit_label(name, finding), finding)
     return findings
+
+
+def begin_leadin_audit_phase(dialog, total):
+    """Reshape `dialog` for the lead-in audit, which is a phase of its own.
+
+    The dialog's range was sized for the wire loop above and is already sitting
+    at that maximum, so without this the audit begins looking finished before it
+    has started -- which is the report this was written in response to: the bar
+    sat at 100% with a static label for the whole audit.
+
+    Module-level and taking the dialog as an argument, rather than a closure
+    over `progress_dialog`, so that it can be driven directly in a test. The
+    closure form could only be reached by parsing its source out of this module,
+    and a test that checks a source string passes whether or not the dialog is
+    ever updated -- which is precisely how the original defect hid from review.
+    """
+    dialog.setRange(0, total)
+    dialog.setValue(0)
+    dialog.setLabelText(f"Checking lead-in pierce points (0 of {total})...")
+    QApplication.processEvents()
+
+
+def report_leadin_audit_progress(dialog, done, total, label, _finding):
+    """Move `dialog` on to the next audited operation. See above for the shape."""
+    dialog.setValue(done)
+    dialog.setLabelText(f"Lead-in check: {done} of {total} done - {label}")
+    QApplication.processEvents()
+
+
+def _report_progress(progress, done, total, label, finding):
+    if progress is not None:
+        progress(done, total, label, finding)
+
+
+def _audit_label(name, finding):
+    """One line describing what happened to a single audited operation."""
+    if finding is None:
+        return f"{name} - not checked"
+    if finding.status == LeadInAudit.ON_PART:
+        # Worth standing out in the dialog: this is the one that needs a human.
+        return f"{name} - NEEDS REVIEW ({finding.detail or 'pierce on the part'})"
+    if finding.status == LeadInAudit.UNREADABLE:
+        return f"{name} - not checked ({finding.detail or 'unreadable'})"
+    return f"{name} - {finding.detail or 'pierce is in the waste'}"
 
 
 def _audit_one(  # noqa: PLR0911
@@ -1605,8 +1660,18 @@ def create_profile_ops_for_top_loops():
         # fixes undo as a single unit and no recompute happens inside a
         # transaction the dressups have already committed out of (ISS-010).
         if leadin_targets and leadIn:
-            progress_dialog.setLabelText("Checking lead-in pierce points...")
-            QApplication.processEvents()
+            # A second, separately-counted phase. The dialog's range is reset
+            # because it was sized for the wire loop above and is sitting at its
+            # own maximum; leaving it there made the audit look finished before
+            # it began, with no way to tell how much was left.
+            audit_total = len(leadin_targets)
+            begin_leadin_audit_phase(progress_dialog, audit_total)
+
+            def on_audit_progress(done, total, label, finding):
+                report_leadin_audit_progress(
+                    progress_dialog, done, total, label, finding,
+                )
+
             doc.openTransaction("Fix Lead-in Placement")
             try:
                 findings = audit_leadin_pierces(
@@ -1615,10 +1680,19 @@ def create_profile_ops_for_top_loops():
                     configured=lengthMultiplier,
                     allow_start_move=bool(settings.get("allowStartMove")),
                     cancel_check=lambda: cancelled_list[0],
+                    progress=on_audit_progress,
                 )
                 doc.recompute()
             finally:
                 doc.commitTransaction()
+
+            counts = LeadInAudit.summarise(findings)
+            progress_dialog.setLabelText(
+                f"Lead-in check complete: {counts[LeadInAudit.CLEAN]} in the "
+                f"waste, {counts[LeadInAudit.ON_PART]} need review, "
+                f"{counts[LeadInAudit.UNREADABLE]} unchecked."
+            )
+            QApplication.processEvents()
             report_leadin_findings(findings)
         elif DEBUG and leadin_targets:
             _dbg("  [LEADIN] Audit skipped: lead-in is disabled\n")
