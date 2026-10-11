@@ -38,7 +38,11 @@ geometry.configure(debug=DEBUG, logger=_dbg)
 class SameEdgesAsHighlighted:
     """Finds and selects all edges matching a template profile (length + Z-level)."""
 
-    def IsEnabled(self):
+    def IsActive(self):
+        # Named `IsActive`, not `IsEnabled`: Gui's PythonCommand::isActive() looks
+        # up `IsActive` by name (Command.cpp) and ignores anything else, so a
+        # method called `IsEnabled` is dead code and the button stays clickable.
+        # IsActive must also return a real bool -- a non-bool is read as False.
         selection = Gui.Selection.getSelectionEx()
         if not selection:
             return False
@@ -175,7 +179,8 @@ def is_effectively_visible(obj, gui_doc, visited=None):
 class FindProfiles:
     """Creates Profile operations for internal edges on CAM Job top faces."""
 
-    def IsEnabled(self):
+    def IsActive(self):
+        # `IsActive`, not `IsEnabled` -- see SameEdgesAsHighlighted.IsActive.
         selection = Gui.Selection.getSelectionEx()
         if not selection:
             return False
@@ -202,7 +207,10 @@ class FindProfiles:
 class SliceModel:
     """Extrudes a sketch's slice lines through a solid and slices it apart."""
 
-    def IsEnabled(self):
+    def IsActive(self):
+        # `IsActive`, not `IsEnabled` -- see SameEdgesAsHighlighted.IsActive.
+        # One attached sketch and nothing else: with nothing selected the button
+        # greys out rather than waiting to complain in the report view.
         selection = Gui.Selection.getSelection()
         if len(selection) != 1:
             return False
@@ -274,15 +282,20 @@ def slice_selected_model():
         progress_dialog.show()
         QApplication.processEvents()
 
-        extrusion, _feature, _group, chunks = Slicing.slice_model(
+        extrusion, feature, _group, chunks = Slicing.slice_model(
             doc, sketch, model, progress=note,
         )
         progress_dialog.setValue(3)
 
         # Hidden, not deleted: the extrusion was scaffolding and the model is the
-        # original, but both are recoverable and both are in the undo. Slice Apart
-        # does the same, and the tree matches what the manual process leaves.
-        for consumed in (model, extrusion):
+        # original, but all three are recoverable and all are in the undo.
+        #
+        # The Slice feature has to go too, and that is not tidiness. Each chunk is
+        # a compound filter reading `Base=Slice`, so a visible Slice re-renders the
+        # whole unsplit panel on top of the pieces -- and because it is the parent of
+        # them in the tree, hiding the group above would not take it away. Part >
+        # Split > Slice Apart hides it for the same reason (SplitFeatures.py).
+        for consumed in (model, extrusion, feature):
             view = getattr(consumed, "ViewObject", None)
             if view is not None:
                 view.hide()
