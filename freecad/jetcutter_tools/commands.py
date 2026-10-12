@@ -819,7 +819,7 @@ def apply_start_point(operation, dressup, xy):
 
 
 def search_for_clear_pierce(operation, dressup, points, region, kerf=None,
-                            cancel_check=None, stats=None):
+                            cancel_check=None, stats=None, edges=None):
     """Try candidate start points until the pierce lands in the waste.
 
     Returns the point that worked, or None. Every candidate is verified against
@@ -831,6 +831,11 @@ def search_for_clear_pierce(operation, dressup, points, region, kerf=None,
     restores it if nothing worked -- a relocation that achieved nothing is a
     silent change to where the cut begins.
 
+    `edges` (optional) is the list of wire edges for the contour. When provided,
+    the midpoint of the longest edge is tried first as a seed candidate before
+    the spiral search begins. This mirrors FreeCAD's `UseLongestEdge` mechanism
+    and costs only one recompute when it works.
+
     `stats`, if given, is a dict collecting how much work this did -- candidates
     tried and recomputes spent. The search is the only part of the audit that
     runs many times per operation, so its cost is worth counting rather than
@@ -839,13 +844,19 @@ def search_for_clear_pierce(operation, dressup, points, region, kerf=None,
     origin = LeadInAudit.pierce_point(dressup.Path)
     if origin is None:
         return None
+
+    # Seed: midpoint of the longest edge, if edges are available.
+    seed = None
+    if edges:
+        seed = LeadInAudit.longest_edge_midpoint(edges)
+
     tried = 0
-    for candidate in LeadInAudit.start_point_candidates(points, origin):
+    for candidate in LeadInAudit.start_point_candidates(points, origin, seed=seed):
         if cancel_check is not None and cancel_check():
             return None
         tried += 1
         if stats is not None:
-            stats["candidates"] = stats.get("candidates", 0) + 1
+            stats["candidates_tried"] = stats.get("candidates_tried", 0) + 1
         if not apply_start_point(operation, dressup, candidate):
             continue
         # `current=True`: apply_start_point has just recomputed this dressup and
@@ -1144,7 +1155,8 @@ def _audit_one(  # noqa: PLR0911
             == LeadInAudit.ACTION_SEARCH):
         searched = True
         moved = search_for_clear_pierce(operation, dressup, points, region,
-                                        kerf, cancel_check, stats)
+                                        kerf, cancel_check, stats,
+                                        edges=wire.Edges if wire is not None else None)
         if moved is not None:
             return settle(LeadInAudit.ACTION_SEARCH,
                           LeadInAudit.describe_relocated(moved))

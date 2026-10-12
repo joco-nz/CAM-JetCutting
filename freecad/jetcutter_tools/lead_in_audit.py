@@ -419,7 +419,7 @@ def is_convex(region):
 
 
 def start_point_candidates(points, origin, step=CANDIDATE_STEP_MM,
-                           limit=MAX_CANDIDATES):
+                           limit=MAX_CANDIDATES, seed=None):
     """Yield `(x, y)` candidates spiralling out from `origin` along a contour.
 
     **Alternating clockwise and anticlockwise outward**, because the point of the
@@ -430,6 +430,10 @@ def start_point_candidates(points, origin, step=CANDIDATE_STEP_MM,
 
     `points` is the contour discretised in order. `origin` is where the cut
     currently begins, so the walk starts where the operator's own setup began.
+
+    `seed` (optional) is a high-prior candidate — e.g. the midpoint of the
+    longest edge — that is yielded *first*, before the spiral. The seed counts
+    toward `limit`.
 
     Hand-rolled arc-length walking rather than Shapely's `project`/`interpolate`,
     so this stays testable without Shapely and without a FreeCAD.
@@ -444,6 +448,13 @@ def start_point_candidates(points, origin, step=CANDIDATE_STEP_MM,
     total = lengths[-1]
     if total <= COINCIDENT_MM:
         return
+
+    # Seed first — highest prior probability candidate
+    if seed is not None:
+        yield seed
+        if limit == 1:
+            return
+        limit -= 1
 
     here = _project_onto(origin, points, lengths)
     tried = 0
@@ -565,6 +576,29 @@ def lead_in_pierce(start, tangent, normal, length, angle_deg):
         start[0] - tangent[0] * math.cos(s) * length + normal[0] * math.sin(s) * length,
         start[1] - tangent[1] * math.cos(s) * length + normal[1] * math.sin(s) * length,
     )
+
+
+def longest_edge_midpoint(edges):
+    """Return the midpoint of the longest edge as (x, y), or None.
+
+    Mirrors FreeCAD's `Area.getMiddlePointLongestEdge` exactly:
+    picks the edge with the greatest `.Length`, then returns
+    `edge.discretize(3)[1]` — the midpoint of a 3-point discretisation.
+
+    Pure and testable without FreeCAD: only requires `.Length` and
+    `.discretize(3)` returning a sequence of objects with `.x`, `.y`.
+    """
+    if not edges:
+        return None
+    best = None
+    for edge in edges:
+        if best is None or edge.Length > best.Length:
+            best = edge
+    try:
+        pt = best.discretize(3)[1]
+    except Exception:  # noqa: BLE001
+        return None
+    return (pt.x, pt.y)
 
 
 def recover_lead_in_geometry(dressup, chords=ARC_CHORDS):
