@@ -362,7 +362,7 @@ def waste_budget(hole_diameter, kerf):
 
 
 def next_action(in_waste, side="Inside", inverted=False, multiplier=None,
-                region_convex=None, allow_start_move=False, search_tried=False):
+                allow_start_move=False, search_tried=False):
     """Decide what to do next about a pierce that is not in the waste.
 
     Ordered so each lever is spent at most once, and in the order that keeps
@@ -372,14 +372,27 @@ def next_action(in_waste, side="Inside", inverted=False, multiplier=None,
        it is on the part whatever the length. `InvertIn` is the lever there, and
        it is tried before anything else because flipping costs nothing and does
        not move the cut's start.
-    2. **Relocation**, when the operator allowed it and the waste region is
-       known to be non-convex. Tried before shortening because the lead-in's
-       length *is* the distance the arc travels before it cuts: a relocation
-       that works keeps the operator's full length and their margin, where a
-       shortening spends it. Skipped on a convex region, where the inward normal
-       cannot leave the waste from any start point and so relocation provably
-       cannot help -- and convex holes are the common failing case, so without
-       this guard each one would pay a search for nothing.
+    2. **Relocation**, when the operator allowed it. Tried before shortening
+       because the lead-in's length *is* the distance the arc travels before it
+       cuts: a relocation that works keeps the operator's full length and their
+       margin, where a shortening spends it.
+
+       **No convexity guard.** There was one -- skip relocation when the waste
+       region was convex, on the reasoning that "the inward normal cannot leave
+       the waste from any start point so relocation provably cannot help". That
+       premise is false. Convexity says the region has no inward dents; it says
+       nothing about the *local width* at a given point on the boundary, which
+       is what decides whether a lead-in of length L fits. A convex rounded
+       triangle is a thin wedge at its corners and wide mid-edge, so a start on
+       a corner fails while a start mid-edge clears easily.
+
+       Measured on the floral panel's `Profile_Loop_31` (3 B-spline edges,
+       convex by every test -- 0.00 mm^2 hull deficit, 0 interior points): the
+       natural start misses clearance by 0.066 mm, while the midpoint of the
+       longest edge clears by 4.187 mm. The guard was suppressing a fix that
+       works, and it had never been exercised on real data -- the reference
+       file has zero flagged operations, because the pre-guard code fixed these
+       by brute-force relocation before the guard existed.
     3. Shorten to the arc-stabilisation floor. Not to some smaller length: below
        the floor the lead-in does not let the arc stabilise, which trades a
        pierce scar for a bad cut. The `multiplier > MINIMUM_MULTIPLIER` guard is
@@ -388,15 +401,12 @@ def next_action(in_waste, side="Inside", inverted=False, multiplier=None,
     4. Flag. The window is empty -- no lead-in both stabilises the arc and stays
        in the waste -- and that is the operator's call, not the addon's.
 
-    `region_convex` of None means "not determined". Relocation is skipped then,
-    because a search costs recomputes and its whole justification is the
-    non-convex case; not being able to tell is not being told yes.
     """
     if in_waste:
         return ACTION_NONE
     if side == "Outside" and not inverted:
         return ACTION_INVERT
-    if allow_start_move and not search_tried and region_convex is False:
+    if allow_start_move and not search_tried:
         return ACTION_SEARCH
     if multiplier is not None and multiplier > MINIMUM_MULTIPLIER:
         return ACTION_SHORTEN

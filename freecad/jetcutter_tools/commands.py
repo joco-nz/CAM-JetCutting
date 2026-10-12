@@ -1095,7 +1095,6 @@ def _audit_one(  # noqa: PLR0911
             "its contour could not be turned into a region to test against")
 
     kerf = tool_kerf(operation)
-    convex = LeadInAudit.is_convex(region)
     # Seeded with the configured value, not None. `next_action` only offers a
     # shortening when it has a multiplier above the floor to compare, so seeding
     # None made every pierce read as unfixable on the first pass -- which is what
@@ -1147,10 +1146,9 @@ def _audit_one(  # noqa: PLR0911
     # -- lever 2b: relocate the start, keeping the full length -------------
     # Skipped when fixed_start=True because setting UseStartPoint on an open
     # chain silently displaces the cut by ~1 mm and makes StartPoint inert.
-    if (not fixed_start and allow_start_move and convex is False
+    if (not fixed_start and allow_start_move
             and LeadInAudit.next_action(False, side=side, inverted=inverted,
                                         multiplier=multiplier,
-                                        region_convex=convex,
                                         allow_start_move=True)
             == LeadInAudit.ACTION_SEARCH):
         searched = True
@@ -1173,7 +1171,7 @@ def _audit_one(  # noqa: PLR0911
 
     # -- lever 3: shorten to the arc-stabilisation floor -------------------
     if LeadInAudit.next_action(False, side=side, inverted=inverted,
-                               multiplier=multiplier, region_convex=convex,
+                               multiplier=multiplier,
                                allow_start_move=allow_start_move,
                                search_tried=searched) \
             == LeadInAudit.ACTION_SHORTEN:
@@ -1261,7 +1259,7 @@ from .geometry import (  # noqa: E402,F401  (re-exported for existing call sites
 
 def create_profile_operation(op_name, job, tool_controller, edge_names, model_clone,
                              offset_side, cut_direction, leadIn, leadOut, styleIn, styleOut,
-                             lengthMultiplier):
+                             lengthMultiplier, start_on_longest_edge=False):
     """Create a CAM Profile operation for the given edges and attach a LeadInOut dressup.
 
     This is the shared factory used by both the closed-loop and concave-chain
@@ -1281,6 +1279,28 @@ def create_profile_operation(op_name, job, tool_controller, edge_names, model_cl
         styleIn: LeadIn style string (e.g. "Perpendicular", "Tangent").
         styleOut: LeadOut style string.
         lengthMultiplier: LeadIn/Out length as a multiple of tool diameter.
+        start_on_longest_edge: Start the cut at the midpoint of the contour's
+            longest edge. **Closed loops only.** Defaults False.
+
+    `start_on_longest_edge` sets FreeCAD's own `Profile.UseLongestEdge`, which
+    the path generation reads (`Area.py:278`) to place the start at the midpoint
+    of the longest edge. It is read inside the path generation that was going to
+    happen anyway, so it costs about 6.7% of a recompute on the floral panel --
+    50.7 ms to 54.1 ms per loop, measured over 30 real operations. No extra
+    recompute.
+
+    Note it lands on a slightly *different* point than the audit's own seed,
+    because FreeCAD computes the longest edge on the kerf-compensated shape from
+    `area.makeSections()` (`Area.py:247`) rather than on the original wire. Both
+    find a wide mid-region spot; on `Profile_Loop_31` they clear 4.180 mm and
+    4.187 mm respectively.
+
+    It is off by default, and the concave path must leave it off.
+    `UseLongestEdge` is gated on `not obj.UseStartPoint` (`Area.py:272-278`) --
+    the same precondition under which `StartPoint` silently displaces an *open*
+    chain's cut by ~1 mm (see `apply_start_point`). Concave chains are the ones
+    on the fixed-start angle sweep, so setting it there risks disturbing geometry
+    that path already relies on.
 
     Returns:
         The created Profile DocumentObject, or None if creation failed.
@@ -1350,6 +1370,21 @@ def create_profile_operation(op_name, job, tool_controller, edge_names, model_cl
                         _dbg(f"    VALID: {base_obj.Name} -> {sub} = {type(elem).__name__}\n")
                 except Exception as e:  # noqa: BLE001
                     App.Console.PrintError(f"    INVALID: {base_obj.Name} -> {sub} ERROR: {e}\n")
+
+    if start_on_longest_edge:
+        # Set before the first recompute, which is when the path is generated and
+        # the property is read. Harmless if the build lacks it: the audit's own
+        # seed still runs later, so this is an optimisation, not a dependency.
+        try:
+            profile_op.UseLongestEdge = True
+            if DEBUG:
+                _dbg(f"  UseLongestEdge set on '{op_name}'\n")
+        except Exception as e:  # noqa: BLE001
+            App.Console.PrintWarning(
+                f"  [CREATE] Could not set UseLongestEdge on '{op_name}': {e}. "
+                "The cut will start at the contour's natural first vertex; the "
+                "lead-in audit can still relocate it if needed.\n",
+            )
 
     profile_op.Direction = cut_direction
     if offset_side == "None":
@@ -1660,6 +1695,13 @@ def create_profile_ops_for_top_loops():
                     op_name, job, tool_controller, edge_names, model_clone,
                     offset_side, cut_direction, leadIn, leadOut, styleIn, styleOut,
                     lengthMultiplier,
+                    # Closed loops only. A closed contour's start is genuinely
+                    # free, and the midpoint of its longest edge is where the
+                    # most room is -- so place it there from the start rather
+                    # than leaving a pierce on the part for the audit to
+                    # repair. Free: FreeCAD reads UseLongestEdge inside the path
+                    # generation that was going to run anyway.
+                    start_on_longest_edge=True,
                 )
                 if profile_op is None:
                     continue
@@ -1792,6 +1834,14 @@ def create_profile_ops_for_top_loops():
                             op_name, job, tool_controller, edge_names, model_clone,
                             concave_offset, cut_direction, leadIn, leadOut, styleIn, styleOut,
                             lengthMultiplier,
+                            # Explicitly OFF, not merely left to the default.
+                            # `UseLongestEdge` is gated on `not UseStartPoint`,
+                            # the same precondition under which StartPoint
+                            # displaces an open chain's cut by ~1 mm and then
+                            # goes inert. A concave chain's start is pinned; its
+                            # pierce is placed by the angle sweep, not by moving
+                            # the start.
+                            start_on_longest_edge=False,
                         )
                         if profile_op is None:
                             continue

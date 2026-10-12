@@ -212,6 +212,57 @@ def body(report):
                                              "".join(e[1] for e in d.ExpressionEngine) or ""),
                          "RadiusIn is expression-bound to the tool diameter")
 
+    # --- 3b. UseLongestEdge is opt-in and off by default -------------------
+    # The flag was added so the closed-loop path can place the start at the
+    # midpoint of the longest edge for free, while the concave path leaves it
+    # off. Two properties of that flag have to be pinned here:
+    #
+    #   1. The DEFAULT is off. Section 3 above calls the factory without the
+    #      flag, so an op created that way must not have it set -- otherwise the
+    #      opt-in is not actually opt-in and every caller is opted in by
+    #      accident, including the concave path.
+    #   2. Passing it True sets it.
+    if op is not None:
+        report.check(getattr(op, "UseLongestEdge", False) is False,
+                     "the factory default leaves UseLongestEdge off")
+
+        op2 = C.create_profile_operation(
+            "Profile_Loop_ULE", job,
+            job.Tools.Group[0],
+            edge_names, clone,
+            "Inside", "CCW",
+            True, False, "Perpendicular", "Perpendicular", 3.0,
+            start_on_longest_edge=True,
+        )
+        doc.recompute()
+        report.check(op2 is not None and getattr(op2, "UseLongestEdge", False) is True,
+                     "start_on_longest_edge=True sets UseLongestEdge")
+
+    # --- 3c. the concave path must NOT set it ------------------------------
+    # Not a style preference: `UseLongestEdge` is gated on `not UseStartPoint`
+    # (Area.py:272-278), the same precondition under which StartPoint displaces
+    # an open chain's cut by ~1 mm and then goes inert. A concave chain is on
+    # the fixed-start angle sweep, so enabling it there risks disturbing
+    # geometry that path relies on.
+    #
+    # Asserted on the source rather than at runtime: the concave branch needs a
+    # full FindProfiles run against a notched part to reach, and the failure
+    # being guarded against is a silent geometry displacement rather than a
+    # crash. Reading the call site catches the regression at the point it would
+    # be introduced.
+    import inspect
+    src = inspect.getsource(C.create_profile_ops_for_top_loops)
+    concave_calls = [blk for blk in src.split("profile_op = create_profile_operation(")[1:]]
+    report.check(len(concave_calls) >= 2,
+                 "both creation paths call the factory (%d found)" % len(concave_calls))
+    closed_has_flag = "start_on_longest_edge=True" in concave_calls[0]
+    concave_has_flag = "start_on_longest_edge=False" in concave_calls[1] if len(concave_calls) > 1 else False
+    report.check(closed_has_flag,
+                 "the closed-loop call site opts in with start_on_longest_edge=True")
+    report.check(concave_has_flag,
+                 "the concave call site explicitly opts out with "
+                 "start_on_longest_edge=False (not merely relying on the default)")
+
     # --- 4. the Z premise: those properties must NOT be written -------------
     # commands.py deliberately does not set StartDepth/FinalDepth (ISS-002).
     # Assert it, so nobody "helpfully" restores them.

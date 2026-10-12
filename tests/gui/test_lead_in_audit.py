@@ -88,10 +88,11 @@ def close_everything():
 def dumbbell(cx, cy, end_radius=6.0, neck_half=3.25, span=12.0):
     """Build a two-lobed face: fat ends joined by a narrower neck.
 
-    **Non-convex on purpose.** A round hole and a rectangular slot are both
-    convex, and on a convex contour the inward normal cannot leave the waste from
-    any start point -- so the audit skips relocation there and the search would
-    never be exercised.
+    **Non-convex, but no longer for the old reason.** This used to be built
+    non-convex specifically so the audit would not skip relocation; that guard is
+    gone, and convex contours are searched too. The shape is kept because a neck
+    is the shape that reliably needs relocating, and it exercises the search in
+    a way a circle does not.
 
     `neck_half` was measured, not guessed. With the start point on the neck's
     lower edge, a 2 mm kerf, and the operator's x3 (a 6 mm lead-in):
@@ -327,21 +328,27 @@ def body(report):
                  "and the report says it was shortened, not changed silently")
     report.check(not small_dressup.Label.startswith(A.ONPART_PREFIX),
                  "a corrected operation is not marked as needing a human")
-    # The guard behind the whole cost argument, on a *second* identical hole with
-    # relocation explicitly allowed. The first one cannot show it: the opt-in
-    # gate fires before the convexity test, so a disallowed search tells you
-    # nothing about the guard. Here the operator has said yes and the only
-    # reason left not to search is that the contour is convex -- where the
-    # inward normal cannot leave the waste from any position.
+    # Convexity must NOT block relocation. On a *second* identical hole with
+    # relocation explicitly allowed, the search now runs even though the
+    # contour is a circle. This is the Profile_Loop_31 case: the old guard
+    # skipped the search because the region was convex, on the premise that
+    # "the inward normal cannot escape the waste from any start point so
+    # relocation provably cannot help". That premise is false -- convexity says
+    # nothing about local width, and a convex rounded triangle is a thin wedge
+    # at its corners and wide mid-edge.
+    #
+    # This particular 7 mm hole cannot actually be fixed (its 6 mm lead-in
+    # exceeds the 3.5 mm inradius from every start), so what is asserted is
+    # that the search RAN, not that it succeeded.
     _cg_job, guard_op, guard_dressup, guard_wire = build_case(doc, "convex", 7.0)
-    report.check(guard_op is not None, "built a second 7 mm hole for the guard")
+    report.check(guard_op is not None, "built a second 7 mm hole to check convexity")
     if guard_op is not None:
         C.audit_leadin_pierces([(guard_op, guard_dressup, guard_wire)],
                                side="Inside", configured=DEFAULT_MULTIPLIER,
                                allow_start_move=True)
-        report.check(not getattr(guard_op, "UseStartPoint", False),
-                     "with relocation allowed, a convex hole is still not "
-                     "searched -- nothing was left to try that could work")
+        report.check(getattr(guard_op, "UseStartPoint", False),
+                     "with relocation allowed, a convex hole IS searched -- "
+                     "convexity no longer suppresses the search")
     report.check_eq(small_dressup.RadiusIn.Value, A.MINIMUM_MULTIPLIER * KERF,
                     "RadiusIn is now %.2f mm (x%.1f x %.1f mm kerf)"
                     % (A.MINIMUM_MULTIPLIER * KERF, A.MINIMUM_MULTIPLIER, KERF))
@@ -448,7 +455,8 @@ def body(report):
                      "a start point on the neck pierces onto the part: %s"
                      % (pierce_of(dumb_dressup),))
         report.check(C.LeadInAudit.is_convex(region) is False,
-                     "the dumbbell is non-convex, so relocation is not skipped")
+                     "the dumbbell is non-convex (relocation runs on convex "
+                     "regions too now, so this is shape description, not a gate)")
 
         findings = C.audit_leadin_pierces(
             [(dumb_op, dumb_dressup, dumb_wire)], side="Inside",

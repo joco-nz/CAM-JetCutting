@@ -509,46 +509,46 @@ def test_a_candidate_is_always_on_the_contour():
 
 # -- the order the levers are spent in --------------------------------------
 
-def test_a_convex_region_is_never_relocated():
-    # The guard that makes relocation affordable: on a convex contour the
-    # inward normal cannot escape the waste from any start point, so relocating
-    # provably cannot help -- and convex holes are the common failing case.
+def test_a_convex_region_is_still_relocated():
+    # Convexity does NOT block relocation. The old guard claimed the inward
+    # normal "cannot escape the waste from any start point, so relocation
+    # provably cannot help". That premise is false: convexity says the region
+    # has no inward dents, and says nothing about the *local width* at a point
+    # on the boundary, which is what decides whether a lead-in of length L fits.
+    #
+    # Measured on the floral panel's Profile_Loop_31 -- 3 B-spline edges, convex
+    # by every test (0.00 mm^2 hull deficit, 0 interior points): the natural
+    # start misses clearance by 0.066 mm, while the midpoint of the longest edge
+    # clears by 4.187 mm. A convex rounded triangle is a thin wedge at its
+    # corners and wide mid-edge, so the corner start fails and mid-edge works.
     assert audit.next_action(False, side="Inside", multiplier=3.0,
-                             region_convex=True, allow_start_move=True,
-                             search_tried=False) == audit.ACTION_SHORTEN
+                             allow_start_move=True,
+                             search_tried=False) == audit.ACTION_SEARCH
 
 
 def test_a_non_convex_region_is_relocated_before_shortening():
     assert audit.next_action(False, side="Inside", multiplier=3.0,
-                             region_convex=False, allow_start_move=True,
+                             allow_start_move=True,
                              search_tried=False) == audit.ACTION_SEARCH
 
 
 def test_relocation_is_not_offered_without_the_operator_asking():
     assert audit.next_action(False, side="Inside", multiplier=3.0,
-                             region_convex=False, allow_start_move=False,
+                             allow_start_move=False,
                              search_tried=False) == audit.ACTION_SHORTEN
 
 
 def test_relocation_is_not_retried_once_spent():
     assert audit.next_action(False, side="Inside", multiplier=3.0,
-                             region_convex=False, allow_start_move=True,
+                             allow_start_move=True,
                              search_tried=True) == audit.ACTION_SHORTEN
 
 
-def test_an_undetermined_region_is_not_relocated():
-    # "Not told yes" is not "told no", but it is also not permission to move
-    # where the cut begins.
-    assert audit.next_action(False, side="Inside", multiplier=3.0,
-                             region_convex=None, allow_start_move=True,
-                             search_tried=False) == audit.ACTION_SHORTEN
-
-
 def test_the_direction_flip_still_precedes_relocation():
-    # It is free and does not move the cut's start, so it goes first even on a
-    # non-convex contour with relocation allowed.
+    # It is free and does not move the cut's start, so it goes first even when
+    # relocation is allowed.
     assert audit.next_action(False, side="Outside", inverted=False,
-                             multiplier=3.0, region_convex=False,
+                             multiplier=3.0,
                              allow_start_move=True,
                              search_tried=False) == audit.ACTION_INVERT
 
