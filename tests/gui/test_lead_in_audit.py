@@ -609,6 +609,76 @@ def body(report):
         "hook nobody calls -- which is how the dialog sat at 100% throughout",
     )
 
+    # --- the first measurement reuses the path the caller just computed -----
+    # The whole cost of the check: measured on the shop's floral panel, the
+    # audit's own geometry is 0.05 s for all 43 contours, so a recompute the
+    # caller had already paid for was effectively the entire runtime.
+    #
+    # Observed through the dressup's own `State`, not by monkeypatching
+    # `recompute`: an instance attribute cannot be shadowed on a FreeCAD
+    # DocumentObject, so a patched counter silently stayed at zero and the
+    # first version of this check passed for the wrong reason. Touched is the
+    # honest signal -- a recompute clears it, skipping one leaves it.
+    _cj, cur_op, cur_dressup, cur_wire = build_case(doc, "current", hole_dia=8.0)
+    report.check(cur_dressup is not None, "built an operation to test recompute reuse")
+
+    def touch(dressup):
+        dressup.touch()
+        return "Touched" in dressup.State
+
+    report.check(touch(cur_dressup),
+                 "a touched dressup reports Touched, so the signal works")
+
+    C.audit_leadin_pierces([(cur_op, cur_dressup, cur_wire)], side="Inside",
+                           configured=DEFAULT_MULTIPLIER, paths_current=True)
+    report.check(
+        "Touched" in cur_dressup.State,
+        "with paths_current=True the audit leaves the dressup touched, so it "
+        "did not recompute a path the caller had already computed",
+    )
+
+    # The complement that matters is not "the default clears Touched" -- that is
+    # fragile, because the audit's own setExpression calls re-touch the dressup.
+    # It is that `current` can never turn a readable operation unreadable: an
+    # empty Path must be recomputed even when told the path is current.
+    # The empty-path class is taken from the dressup rather than imported: it
+    # is Path.Path's Toolpath in some builds and elsewhere, and `type()` of a
+    # real one cannot be wrong.
+    empty_path = type(cur_dressup.Path)()
+    saved_path = cur_dressup.Path
+    try:
+        cur_dressup.Path = empty_path
+        report.check(
+            not cur_dressup.Path.Commands,
+            "the dressup's Path is now empty",
+        )
+        cur_dressup.recompute()
+        with_empty = C.measure_pierce(cur_dressup,
+                                      C.waste_region_from_wire(cur_wire),
+                                      KERF, current=True)
+        report.check(with_empty[0] is not None,
+                     "an empty Path is recomputed even with current=True, so "
+                     "the flag can only skip work, never hide it")
+    finally:
+        cur_dressup.Path = saved_path
+        cur_dressup.recompute()
+
+    # And after the audit changes something, the next measurement must recompute
+    # rather than read the pre-change path.
+    _sj, s_op, s_dressup, s_wire = build_case(doc, "reafter", hole_dia=7.0)
+    before = s_dressup.RadiusIn.Value
+    findings = C.audit_leadin_pierces(
+        [(s_op, s_dressup, s_wire)], side="Inside",
+        configured=DEFAULT_MULTIPLIER, paths_current=True,
+    )
+    report.check(findings[0].status == A.CLEAN,
+                 "the operation was fixed with paths_current=True: %s"
+                 % findings[0].detail)
+    report.check(abs(s_dressup.RadiusIn.Value - before) > 1e-9,
+                 "and its lead-in really changed (%.3f -> %.3f), so the "
+                 "reading was not a stale path passed off as current"
+                 % (before, s_dressup.RadiusIn.Value))
+
     # --- the dialog will not offer a lead-in that cannot stabilise an arc ---
     # The floor is asserted in the fast tier, but that only proves the constant.
     # This proves the dialog *uses* it, which is the part that can regress: the

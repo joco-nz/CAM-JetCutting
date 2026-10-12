@@ -210,6 +210,102 @@ def group_concave_chains(edges, concave_indices):
     return chains
 
 
+# Boundary tolerance for "on the part edge" — tight, matching is_contiguous_run's
+# vertex-coincidence tolerance so the same notion of "same point" governs both.
+_BOUNDARY_TOL_MM = 1e-6
+
+
+def _vertex_on_boundary(vertex, wire_bbox, tol):
+    """Check if a vertex lies on the wire's bounding box boundary within tolerance."""
+    return (
+        abs(vertex.X - wire_bbox.XMin) <= tol
+        or abs(vertex.X - wire_bbox.XMax) <= tol
+        or abs(vertex.Y - wire_bbox.YMin) <= tol
+        or abs(vertex.Y - wire_bbox.YMax) <= tol
+    )
+
+
+def _endpoint_on_boundary(edge, wire_bbox, tol):
+    """Check if either endpoint of `edge` lies on the wire's bounding box."""
+    return _vertex_on_boundary(edge.Vertexes[0], wire_bbox, tol) or _vertex_on_boundary(edge.Vertexes[-1], wire_bbox, tol)
+
+
+def extend_chains_to_boundary(edges, chains, wire_bbox, tol=_BOUNDARY_TOL_MM):
+    """Extend each concave chain at both ends until its endpoints reach the wire's boundary.
+
+    Each chain is a list of edges forming a consecutive run along the wire.
+    At each end, we walk along the wire adding adjacent edges until an endpoint
+    lands on the wire's bounding box (i.e., the part's outer boundary).
+    The boundary check uses a tight tolerance (1e-6 mm) matching the
+    vertex-coincidence tolerance used in `is_contiguous_run`, ensuring the same
+    geometric "same point" criterion applies everywhere.
+
+    Args:
+        edges: The wire's edges, indexed as they appear on the wire.
+        chains: List of chains, each a list of edges forming a consecutive run.
+        wire_bbox: The wire's bounding box.
+        tol: Tolerance for boundary detection.
+
+    Returns:
+        New list of chains, each possibly extended with adjacent edges.
+    """
+    if not chains:
+        return chains
+
+    # Build hash-to-index map for O(1) edge lookup, since edge equality
+    # is geometric and two identical edges at different positions are distinct.
+    edge_hash_to_idx = {e.hashCode(): i for i, e in enumerate(edges)}
+    n = len(edges)
+
+    extended_chains = []
+    for chain in chains:
+        if not chain:
+            extended_chains.append(chain)
+            continue
+
+        # Map chain edges back to their indices in the wire.
+        chain_indices = [edge_hash_to_idx.get(e.hashCode()) for e in chain]
+        if any(idx is None for idx in chain_indices):
+            # Should not happen — chain edges come from the wire — but be safe.
+            extended_chains.append(chain)
+            continue
+
+        # Extend backwards (toward lower indices).
+        start_idx = chain_indices[0]
+        while True:
+            prev_idx = (start_idx - 1) % n
+            prev_edge = edges[prev_idx]
+            # Stop if the START vertex of the previous edge is on the boundary.
+            # That edge lies along the boundary and should not be included.
+            if not _vertex_on_boundary(prev_edge.Vertexes[0], wire_bbox, tol):
+                start_idx = prev_idx
+            else:
+                break
+
+        # Extend forwards (toward higher indices).
+        end_idx = chain_indices[-1]
+        while True:
+            next_idx = (end_idx + 1) % n
+            next_edge = edges[next_idx]
+            # Stop if the START vertex of the next edge is on the boundary.
+            # That edge lies along the boundary and should not be included.
+            if not _vertex_on_boundary(next_edge.Vertexes[0], wire_bbox, tol):
+                end_idx = next_idx
+            else:
+                break
+
+        # Reconstruct the extended chain.
+        if start_idx <= end_idx:
+            extended_indices = list(range(start_idx, end_idx + 1))
+        else:
+            # Wrapped around the end of the wire.
+            extended_indices = list(range(start_idx, n)) + list(range(0, end_idx + 1))
+
+        extended_chains.append([edges[i] for i in extended_indices])
+
+    return extended_chains
+
+
 def find_concave_chains(wire, face_normal, concave_depth_tol=5.0):
     """Find edge chains forming concave indentations in a wire."""
     try:
@@ -263,7 +359,23 @@ def find_concave_chains(wire, face_normal, concave_depth_tol=5.0):
                 _dbg("  [CONCAVE_CHAINS] Need at least 2 concave edges, returning []\n")
             return []
 
-        return group_concave_chains(edges, concave_indices)
+        chains = group_concave_chains(edges, concave_indices)
+        # Extend each chain until its endpoints reach the wire's boundary.
+        # Compute bbox from the wire's edges since we don't have the model's top face here.
+        bb_min_x = bb_min_y = float("inf")
+        bb_max_x = bb_max_y = float("-inf")
+        for edge in edges:
+            for v in edge.Vertexes:
+                bb_min_x = min(bb_min_x, v.X)
+                bb_max_x = max(bb_max_x, v.X)
+                bb_min_y = min(bb_min_y, v.Y)
+                bb_max_y = max(bb_max_y, v.Y)
+        wire_bbox = type("BBox", (), {
+            "XMin": bb_min_x, "XMax": bb_max_x,
+            "YMin": bb_min_y, "YMax": bb_max_y
+        })()
+        chains = extend_chains_to_boundary(edges, chains, wire_bbox)
+        return chains
     except Exception as e:  # noqa: BLE001
         _report_error("  [CONCAVE_CHAINS]", e)
         return []

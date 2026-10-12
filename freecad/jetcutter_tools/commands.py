@@ -744,7 +744,7 @@ def tool_kerf(operation):
             return None
 
 
-def measure_pierce(dressup, region, kerf=None):
+def measure_pierce(dressup, region, kerf=None, current=False):
     """Return `(pierce, clear)` for a dressup, or `(None, None)` if unreadable.
 
     `clear` means the pierce is inside the waste **and** at least `kerf/2` from
@@ -755,11 +755,23 @@ def measure_pierce(dressup, region, kerf=None):
     Recomputes the dressup first: its path is what is read, and a path left
     stale by an earlier edit would report the pre-edit geometry as if it were
     the result.
+
+    `current=True` says the caller has already recomputed this dressup and
+    nothing has touched it since, so the recompute is skipped. That is the
+    normal case for the audit's *first* measurement of each operation:
+    FindProfiles finishes creating them with a `doc.recompute()`, and the audit
+    then re-derived every one of those paths from scratch. On the shop's floral
+    panel the audit's own geometry costs 0.05 s for all 43 contours, so a
+    recompute the caller has already paid for was the entire cost of the check.
+
+    A path that is null or empty is recomputed anyway, so `current` can only ever
+    skip work, never turn a readable path into an unreadable one.
     """
-    try:
-        dressup.recompute()
-    except Exception:  # noqa: BLE001
-        return None, None
+    if not current or not getattr(dressup, "Path", None):
+        try:
+            dressup.recompute()
+        except Exception:  # noqa: BLE001
+            return None, None
     pierce = LeadInAudit.pierce_point(dressup.Path)
     if pierce is None:
         return None, None
@@ -807,7 +819,7 @@ def apply_start_point(operation, dressup, xy):
 
 
 def search_for_clear_pierce(operation, dressup, points, region, kerf=None,
-                            cancel_check=None):
+                            cancel_check=None, stats=None):
     """Try candidate start points until the pierce lands in the waste.
 
     Returns the point that worked, or None. Every candidate is verified against
@@ -818,23 +830,38 @@ def search_for_clear_pierce(operation, dressup, points, region, kerf=None,
     Leaves the start point wherever the last attempt put it, so the caller
     restores it if nothing worked -- a relocation that achieved nothing is a
     silent change to where the cut begins.
+
+    `stats`, if given, is a dict collecting how much work this did -- candidates
+    tried and recomputes spent. The search is the only part of the audit that
+    runs many times per operation, so its cost is worth counting rather than
+    estimating.
     """
     origin = LeadInAudit.pierce_point(dressup.Path)
     if origin is None:
         return None
+    tried = 0
     for candidate in LeadInAudit.start_point_candidates(points, origin):
         if cancel_check is not None and cancel_check():
             return None
+        tried += 1
+        if stats is not None:
+            stats["candidates"] = stats.get("candidates", 0) + 1
         if not apply_start_point(operation, dressup, candidate):
             continue
-        _pierce, clear = measure_pierce(dressup, region, kerf)
+        # `current=True`: apply_start_point has just recomputed this dressup and
+        # nothing has touched it since. Without it the search recomputes the
+        # same path twice per candidate -- and the search is the one part of the
+        # audit that runs up to 48 times per operation, so that duplicate was the
+        # single largest avoidable cost in the whole command.
+        _pierce, clear = measure_pierce(dressup, region, kerf, current=True)
         if clear:
             return candidate
     return None
 
 
 def audit_leadin_pierces(targets, side, configured=LeadInAudit.DEFAULT_MULTIPLIER,
-                         allow_start_move=False, cancel_check=None, progress=None):
+                         allow_start_move=False, cancel_check=None, progress=None,
+                         paths_current=False):
     """Move every target's lead-in pierce into the waste, or say why not.
 
     `targets` is a list of `(operation, dressup, wire)`. Each is measured from
@@ -847,6 +874,12 @@ def audit_leadin_pierces(targets, side, configured=LeadInAudit.DEFAULT_MULTIPLIE
     `allow_start_move` permits relocating a cut's start, which preserves the
     operator's full lead-in but changes where the cut begins -- so it is off
     unless they asked for it.
+
+    `paths_current` says every target's toolpath was just recomputed by the
+    caller and has not been touched since, so the audit's first measurement of
+    each skips its own recompute. It is only ever set by a caller that has just
+    run a document recompute; every measurement after the audit has changed
+    something recomputes regardless.
 
     `progress` is called as `progress(done, total, label, finding)`, twice per
     target: once naming the operation about to be worked on, and once with its
@@ -862,17 +895,36 @@ def audit_leadin_pierces(targets, side, configured=LeadInAudit.DEFAULT_MULTIPLIE
     """
     findings = []
     total = len(targets)
+    stats = {"total": total, "clean": 0, "on_part": 0, "unreadable": 0, "shortened": 0, "relocated": 0, "flagged": 0, "searches": 0, "candidates_tried": 0}
+    
+    App.Console.PrintMessage(f"[LeadInAudit] Starting audit of {total} operations (relocation={'on' if allow_start_move else 'off'}, paths_current={'yes' if paths_current else 'no'})\n")
+    
     for index, (operation, dressup, wire) in enumerate(targets):
         if cancel_check is not None and cancel_check():
+            App.Console.PrintWarning(f"[LeadInAudit] Cancelled at {index+1}/{total}\n")
             break
         name = getattr(dressup, "Name", None) or getattr(operation, "Name", "?")
         _report_progress(progress, index, total, f"Checking {name}...", None)
         finding = _audit_one(operation, dressup, wire, side, configured,
-                             allow_start_move, cancel_check)
+                             allow_start_move, cancel_check,
+                             path_current=paths_current, stats=stats)
         if finding is not None:
             findings.append(finding)
+            # Update stats
+            stats[finding.status] = stats.get(finding.status, 0) + 1
+            if finding.action == LeadInAudit.ACTION_SHORTEN:
+                stats["shortened"] += 1
+            elif finding.action == LeadInAudit.ACTION_SEARCH:
+                stats["relocated"] += 1
+                stats["searches"] += 1
+            elif finding.action == LeadInAudit.ACTION_FLAG:
+                stats["flagged"] += 1
         _report_progress(progress, index + 1, total,
                          _audit_label(name, finding), finding)
+    
+    App.Console.PrintMessage(f"[LeadInAudit] Complete: {stats['clean']} clean, {stats['shortened']} shortened, {stats['relocated']} relocated, {stats['flagged']} flagged, {stats['unreadable']} unreadable\n")
+    if stats["searches"] > 0:
+        App.Console.PrintMessage(f"[LeadInAudit] Relocation stats: {stats['searches']} searches, {stats['candidates_tried']} candidates tried, avg {stats['candidates_tried']/max(1,stats['searches']):.1f} candidates/search\n")
     return findings
 
 
@@ -922,7 +974,7 @@ def _audit_label(name, finding):
 
 def _audit_one(  # noqa: PLR0911
         operation, dressup, wire, side, configured, allow_start_move,
-        cancel_check):
+        cancel_check, path_current=False, stats=None):
     """Return the `Finding` for one operation, having tried to fix it.
 
     Many returns because the levers are a straight-line sequence and each has its
@@ -966,7 +1018,7 @@ def _audit_one(  # noqa: PLR0911
 
     # -- lever 1: direction ------------------------------------------------
     # Free, and it does not move the cut's start, so it goes first.
-    pierce, clear = measure_pierce(dressup, region, kerf)
+    pierce, clear = measure_pierce(dressup, region, kerf, current=path_current)
     if pierce is None:
         return LeadInAudit.Finding(
             name, LeadInAudit.UNREADABLE,
@@ -975,7 +1027,7 @@ def _audit_one(  # noqa: PLR0911
         dressup.InvertIn = not getattr(dressup, "InvertIn", False)
         inverted = True
         multiplier = configured
-        pierce, clear = measure_pierce(dressup, region, kerf)
+        pierce, clear = measure_pierce(dressup, region, kerf, current=False)
         if pierce is None:
             return LeadInAudit.Finding(
                 name, LeadInAudit.UNREADABLE,
@@ -993,7 +1045,7 @@ def _audit_one(  # noqa: PLR0911
             == LeadInAudit.ACTION_SEARCH):
         searched = True
         moved = search_for_clear_pierce(operation, dressup, points, region,
-                                        kerf, cancel_check)
+                                        kerf, cancel_check, stats)
         if moved is not None:
             return settle(LeadInAudit.ACTION_SEARCH,
                           LeadInAudit.describe_relocated(moved))
@@ -1604,6 +1656,16 @@ def create_profile_ops_for_top_loops():
                         op_count += 1
                         op_name = f"Profile_Concave_{op_count}"
 
+                        # Concave chains cut from the outside boundary inward, so the
+                        # cut side is the opposite of what the dialog specifies.
+                        # Inside <-> Outside, None stays None.
+                        if offset_side == "Inside":
+                            concave_offset = "Outside"
+                        elif offset_side == "Outside":
+                            concave_offset = "Inside"
+                        else:
+                            concave_offset = offset_side  # None stays None
+
                         progress_dialog.setLabelText(
                             f"Creating {op_name}..."
                         )
@@ -1611,7 +1673,7 @@ def create_profile_ops_for_top_loops():
 
                         profile_op = create_profile_operation(
                             op_name, job, tool_controller, edge_names, model_clone,
-                            offset_side, cut_direction, leadIn, leadOut, styleIn, styleOut,
+                            concave_offset, cut_direction, leadIn, leadOut, styleIn, styleOut,
                             lengthMultiplier,
                         )
                         if profile_op is None:
@@ -1673,6 +1735,8 @@ def create_profile_ops_for_top_loops():
                 )
 
             doc.openTransaction("Fix Lead-in Placement")
+            # `paths_current=True`: the doc.recompute() above already computed
+            # every one of these dressups, and nothing has touched them since.
             try:
                 findings = audit_leadin_pierces(
                     leadin_targets,
@@ -1681,6 +1745,7 @@ def create_profile_ops_for_top_loops():
                     allow_start_move=bool(settings.get("allowStartMove")),
                     cancel_check=lambda: cancelled_list[0],
                     progress=on_audit_progress,
+                    paths_current=True,
                 )
                 doc.recompute()
             finally:
