@@ -859,6 +859,71 @@ def search_for_clear_pierce(operation, dressup, points, region, kerf=None,
     return None
 
 
+def search_for_angle_pierce(dressup, region, kerf=None, cancel_check=None, stats=None):
+    """Try candidate angles (and invert) until the pierce lands in the waste.
+
+    For fixed-start chains (concave), the start point cannot move, so the only
+    free parameter is the lead-in angle. We sweep angles alternating from 90°
+    (Perpendicular) and try both invert settings (which together sweep the full
+    inward half-plane). The first candidate that puts the pierce in the waste
+    with kerf/2 margin is applied: StyleIn='Line', AngleIn=angle, InvertIn=flip.
+    A single recompute verifies the toolpath matches the prediction.
+
+    Returns the (angle_deg, flip) that worked, or None. The dressup is left in
+    the final attempted state; the caller restores original settings on failure.
+
+    `stats`, if given, collects candidates tried.
+    """
+    # Recover the geometric parameters from the current dressup state.
+    geom = LeadInAudit.recover_lead_in_geometry(dressup)
+    if geom is None:
+        return None
+    start, tangent_unit, normal_unit, length = geom
+
+    # Original settings to restore on failure.
+    orig_style = getattr(dressup, "StyleIn", "Perpendicular")
+    orig_angle = getattr(dressup, "AngleIn", 90.0)
+    orig_invert = getattr(dressup, "InvertIn", False)
+
+    tried = 0
+    for flip in (False, True):
+        if cancel_check is not None and cancel_check():
+            return None
+        # InvertIn flips the normal direction (getLeadDir negates it).
+        normal = normal_unit if not flip else (-normal_unit[0], -normal_unit[1])
+        for angle in LeadInAudit.angle_candidates():
+            if cancel_check is not None and cancel_check():
+                return None
+            tried += 1
+            if stats is not None:
+                stats["candidates_tried"] = stats.get("candidates_tried", 0) + 1
+            # Predict the pierce analytically (matches leadinout.py exactly).
+            pred = LeadInAudit.lead_in_pierce(start, tangent_unit, normal,
+                                              length, angle)
+            if pred is None:
+                continue
+            # Check clearance against the waste region.
+            if not LeadInAudit.is_in_waste(pred, region, margin=(kerf / 2.0) if kerf else 0.0):
+                continue
+            # Prediction passes: apply and verify with one recompute.
+            dressup.StyleIn = "Line"
+            dressup.AngleIn = float(angle)
+            dressup.InvertIn = flip
+            dressup.recompute()
+            pierce, clear = measure_pierce(dressup, region, kerf, current=True)
+            if clear and pierce is not None:
+                return (angle, flip)
+            # Verification failed (should not happen if geometry is sound),
+            # continue searching.
+
+    # Nothing worked: restore original settings.
+    dressup.StyleIn = orig_style
+    dressup.AngleIn = orig_angle
+    dressup.InvertIn = orig_invert
+    dressup.recompute()
+    return None
+
+
 def audit_leadin_pierces(targets, side, configured=LeadInAudit.DEFAULT_MULTIPLIER,
                          allow_start_move=False, cancel_check=None, progress=None,
                          paths_current=False):
@@ -997,9 +1062,8 @@ def _audit_one(  # noqa: PLR0911
     get wrong and hard to see.
 
     `fixed_start` means the cut's start point is fixed (e.g. concave chain).
-    When True, the relocation lever is skipped entirely because setting
-    UseStartPoint on an open chain silently displaces the cut and renders
-    StartPoint inert.
+    When True, the relocation lever is skipped and the angle-sweep lever is
+    used instead (changing the lead-in angle while keeping the start fixed).
     """
     if dressup is None:
         return LeadInAudit.Finding(
@@ -1029,6 +1093,7 @@ def _audit_one(  # noqa: PLR0911
     multiplier = configured
     inverted = False
     searched = False
+    angle_swept = False
 
     def settle(action, detail):
         LeadInAudit.clear_on_part(dressup)
@@ -1055,7 +1120,20 @@ def _audit_one(  # noqa: PLR0911
         return settle(LeadInAudit.ACTION_INVERT if inverted else None,
                       "lead-in direction flipped inward" if inverted else "")
 
-    # -- lever 2: relocate the start, keeping the full length --------------
+    # -- lever 2a: angle sweep for fixed-start chains (concave) ------------
+    # The start point is pinned; the only free parameter is the lead-in angle.
+    # Sweep angles alternating from 90° (Perpendicular) with both invert
+    # settings, which together cover the full inward half-plane.
+    if fixed_start:
+        angle_swept = True
+        result = search_for_angle_pierce(dressup, region, kerf, cancel_check, stats)
+        if result is not None:
+            angle, flip = result
+            return settle(LeadInAudit.ACTION_SEARCH,
+                          LeadInAudit.describe_angle(angle, flip))
+        # Angle sweep exhausted at full length -- fall through to shortening.
+
+    # -- lever 2b: relocate the start, keeping the full length -------------
     # Skipped when fixed_start=True because setting UseStartPoint on an open
     # chain silently displaces the cut by ~1 mm and makes StartPoint inert.
     if (not fixed_start and allow_start_move and convex is False
@@ -1105,8 +1183,12 @@ def _audit_one(  # noqa: PLR0911
         multiplier = configured
         with contextlib.suppress(Exception):
             dressup.recompute()
-    if searched and not allow_start_move:
+    # If we tried a search (relocation or angle sweep) but the user disallowed
+    # start-move, don't report it as "search exhausted" -- the search was never
+    # enabled by the checkbox.
+    if (searched or angle_swept) and not allow_start_move:
         searched = False
+        angle_swept = False
     detail = LeadInAudit.describe_flag(
         multiplier,
         None if kerf is None else
@@ -1114,6 +1196,8 @@ def _audit_one(  # noqa: PLR0911
         kerf or 0.0)
     if searched:
         detail = LeadInAudit.describe_search_exhausted() + "; " + detail
+    elif angle_swept:
+        detail = LeadInAudit.describe_search_exhausted() + " (angle sweep); " + detail
     LeadInAudit.mark_on_part(dressup, detail)
     return LeadInAudit.Finding(name, LeadInAudit.ON_PART, detail, pierce,
                                multiplier, LeadInAudit.ACTION_FLAG)

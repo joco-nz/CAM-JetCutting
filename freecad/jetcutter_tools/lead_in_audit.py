@@ -506,6 +506,12 @@ def describe_relocated(point):
     return f"cut start moved to ({point[0]:.3f}, {point[1]:.3f}) to keep the full lead-in"
 
 
+def describe_angle(angle_deg, flipped):
+    """Return one line saying the lead-in angle was changed."""
+    flip = ", direction flipped" if flipped else ""
+    return f"lead-in angle changed to {angle_deg:.0f} deg{flip} (was Perpendicular)"
+
+
 def describe_search_exhausted():
     """Return one line saying no start point left room for the chosen length."""
     return "no start point on the contour left room for the full lead-in"
@@ -524,6 +530,73 @@ def describe_flag(multiplier, budget, kerf):
     return (f"x{multiplier} pierces on the part, and this {kerf:.2f} mm kerf "
             f"leaves only {budget:.2f} mm of waste against the "
             f"{MINIMUM_MULTIPLIER * kerf:.2f} mm an arc needs to stabilise")
+
+
+# -- angle sweep helpers ----------------------------------------------------
+
+def angle_candidates(step=2, low=2, high=178):
+    """Yield angles alternating outwards from 90°: 90, 88, 92, 86, 94, ...
+
+    Alternating ensures the smallest deviation from the operator's Perpendicular
+    is tried first, on either side. The bounds are exclusive of 0/180 because
+    a straight lead-in at 0 or 180 is tangent (degenerate for pierce placement).
+    """
+    yield 90
+    lo, hi = 90 - step, 90 + step
+    while lo >= low or hi <= high:
+        if lo >= low:
+            yield lo
+            lo -= step
+        if hi <= high:
+            yield hi
+            hi += step
+
+
+def lead_in_pierce(start, tangent, normal, length, angle_deg):
+    """Return the pierce point for a straight lead-in at `angle_deg`.
+
+    Mirrors `leadinout.py:554-560` exactly: tangentLength = cos(angle) * L,
+    normalLength = sin(angle) * L, with `normal` pointing along the inward
+    normal (the pierce lies on the normal side of the start point).
+    """
+    import math
+    s = math.radians(angle_deg)
+    return (
+        start[0] - tangent[0] * math.cos(s) * length + normal[0] * math.sin(s) * length,
+        start[1] - tangent[1] * math.cos(s) * length + normal[1] * math.sin(s) * length,
+    )
+
+
+def recover_lead_in_geometry(dressup, chords=ARC_CHORDS):
+    """Return (start, tangent_unit, normal_unit, length) from a dressup's path.
+
+    `start` is the cut's start point (end of the lead-in straight move).
+    `tangent_unit` is the direction of travel into the cut (unit vector).
+    `normal_unit` is the inward normal used by the dressup (unit vector).
+    `length` is the effective lead-in length (RadiusIn + ExtendIn).
+
+    Returns None if the path cannot be parsed.
+    """
+    moves = cut_moves(dressup.Path, chords)
+    if len(moves) < 2:
+        return None
+    # Lead-in is the first move; cut start is its end (which is move[1].start)
+    start = moves[1].start
+    tangent = (moves[1].x1 - start[0], moves[1].y1 - start[1])
+    mag = math.hypot(tangent[0], tangent[1])
+    if mag <= COINCIDENT_MM:
+        return None
+    tangent_unit = (tangent[0] / mag, tangent[1] / mag)
+    # Normal = direction from start to pierce at 90° (i.e., the inward normal)
+    pierce90 = pierce_point(dressup.Path)
+    if pierce90 is None:
+        return None
+    normal = (pierce90[0] - start[0], pierce90[1] - start[1])
+    length = math.hypot(normal[0], normal[1])
+    if length <= COINCIDENT_MM:
+        return None
+    normal_unit = (normal[0] / length, normal[1] / length)
+    return start, tangent_unit, normal_unit, length
 
 
 # -- marking ----------------------------------------------------------------
