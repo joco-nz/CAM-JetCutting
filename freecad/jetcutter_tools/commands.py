@@ -864,10 +864,17 @@ def audit_leadin_pierces(targets, side, configured=LeadInAudit.DEFAULT_MULTIPLIE
                          paths_current=False):
     """Move every target's lead-in pierce into the waste, or say why not.
 
-    `targets` is a list of `(operation, dressup, wire)`. Each is measured from
+    `targets` is a list of `(operation, dressup, wire)` or
+    `(operation, dressup, wire, fixed_start)`. Each is measured from
     its own generated toolpath rather than from the closed-form budget, because
     the formula in `waste_budget` assumes a convex contour of a known diameter
     and would misjudge a slot or a concave chain.
+
+    `fixed_start` (optional 4th element) means the cut's start point is fixed
+    -- e.g. a concave chain whose start is pinned at the part boundary.
+    When True, the relocation lever is skipped entirely because setting
+    UseStartPoint on an open chain silently displaces the cut and renders
+    StartPoint inert.
 
     `configured` is the multiplier the operations were created with, so a
     shortening can be reported as a change from what the operator asked for.
@@ -899,15 +906,22 @@ def audit_leadin_pierces(targets, side, configured=LeadInAudit.DEFAULT_MULTIPLIE
     
     App.Console.PrintMessage(f"[LeadInAudit] Starting audit of {total} operations (relocation={'on' if allow_start_move else 'off'}, paths_current={'yes' if paths_current else 'no'})\n")
     
-    for index, (operation, dressup, wire) in enumerate(targets):
+    for index, target in enumerate(targets):
         if cancel_check is not None and cancel_check():
             App.Console.PrintWarning(f"[LeadInAudit] Cancelled at {index+1}/{total}\n")
             break
+        # Targets are (operation, dressup, wire) or (operation, dressup, wire, fixed_start)
+        if len(target) == 4:
+            operation, dressup, wire, fixed_start = target
+        else:
+            operation, dressup, wire = target
+            fixed_start = False
         name = getattr(dressup, "Name", None) or getattr(operation, "Name", "?")
         _report_progress(progress, index, total, f"Checking {name}...", None)
         finding = _audit_one(operation, dressup, wire, side, configured,
                              allow_start_move, cancel_check,
-                             path_current=paths_current, stats=stats)
+                             path_current=paths_current, stats=stats,
+                             fixed_start=fixed_start)
         if finding is not None:
             findings.append(finding)
             # Update stats
@@ -974,13 +988,18 @@ def _audit_label(name, finding):
 
 def _audit_one(  # noqa: PLR0911
         operation, dressup, wire, side, configured, allow_start_move,
-        cancel_check, path_current=False, stats=None):
+        cancel_check, path_current=False, stats=None, fixed_start=False):
     """Return the `Finding` for one operation, having tried to fix it.
 
     Many returns because the levers are a straight-line sequence and each has its
     own way of ending: in waste, unreadable, or flagged. Splitting it into one
     function per lever would hide the ordering, which is the part that is easy to
     get wrong and hard to see.
+
+    `fixed_start` means the cut's start point is fixed (e.g. concave chain).
+    When True, the relocation lever is skipped entirely because setting
+    UseStartPoint on an open chain silently displaces the cut and renders
+    StartPoint inert.
     """
     if dressup is None:
         return LeadInAudit.Finding(
@@ -1037,7 +1056,9 @@ def _audit_one(  # noqa: PLR0911
                       "lead-in direction flipped inward" if inverted else "")
 
     # -- lever 2: relocate the start, keeping the full length --------------
-    if (allow_start_move and convex is False
+    # Skipped when fixed_start=True because setting UseStartPoint on an open
+    # chain silently displaces the cut by ~1 mm and makes StartPoint inert.
+    if (not fixed_start and allow_start_move and convex is False
             and LeadInAudit.next_action(False, side=side, inverted=inverted,
                                         multiplier=multiplier,
                                         region_convex=convex,
@@ -1687,9 +1708,15 @@ def create_profile_ops_for_top_loops():
                             chain_wire = Part.Wire(ordered)
                         except Exception:  # noqa: BLE001
                             chain_wire = None
+                        # Concave chains have a fixed start point (one end of the
+                        # chain). Setting UseStartPoint on an open chain silently
+                        # displaces the cut by ~1 mm and makes StartPoint inert
+                        # -- relocation is actively harmful. Mark it so the audit
+                        # skips the relocation lever entirely.
+                        fixed_start = chain_wire is not None and not chain_wire.isClosed()
                         leadin_targets.append(
                             (profile_op, find_dressup_on(doc, profile_op),
-                             chain_wire)
+                             chain_wire, fixed_start)
                         )
 
                         if DEBUG:
