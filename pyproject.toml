@@ -5,13 +5,18 @@
 version = "1.1.0"
 name = "CAM-JetCutting"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "shapely>=2.0",
+]
 
 [project.optional-dependencies]
 dev = [
     "freecad-stubs>=1.0.21",
     "pyside6>=6.11.0",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 88
